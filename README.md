@@ -33,6 +33,7 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
 
 ## Layout
 
+- `orgzly.el` — the single-file bundle, generated (do not edit by hand)
 - `jetpacs/` — the vendored Jetpacs foundation (protocol, elisp core,
   Android companion). Untouched by this app.
 - `emacs/apps/orgzly/` — the app: `orgzly-query.el` (query language),
@@ -40,26 +41,55 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
   (books/notes/editor views), `orgzly-agenda.el`, `orgzly-search.el`,
   `orgzly-reminders.el`, `orgzly-widget.el`, `orgzly-capture.el`,
   `orgzly-settings.el`, and the `orgzly.el` entry point.
+- `emacs/build-bundle.el` — regenerates the root `orgzly.el` (app-only;
+  the bundle opens with `(require 'jetpacs-core)`)
 - `test/` — 57 ERT tests, including a jetpacs-lint pass over every view.
 - `docs/PARITY.md` — the feature matrix and deliberate divergences.
 
 ## Getting started
 
-1. Build and install the companion APK from `jetpacs/` and pair it
-   (see [jetpacs/README.md](jetpacs/README.md) — the companion listens,
-   Emacs dials in).
-2. Load the app in the Emacs the companion talks to:
+First, build and install the companion APK from `jetpacs/` and pair it
+(see [jetpacs/README.md](jetpacs/README.md) — the companion listens,
+Emacs dials in). Then load the app in the Emacs the companion talks to,
+by any of the three routes below. All of them need the Jetpacs core
+first — the bundle `(require 's it, never copies it, so one installed
+`jetpacs-core.el` serves every Jetpacs app.
 
-   ```elisp
-   (add-to-list 'load-path "~/src/orgzly-native/jetpacs/emacs/core")
-   (add-to-list 'load-path "~/src/orgzly-native/emacs/apps/orgzly")
-   (require 'orgzly)
-   (setq orgzly-directory "~/org")   ; where your notebooks live
-   M-x jetpacs-connect
-   ```
+**Single-file bundle.** Grab `orgzly.el` from this repo's root and
+`jetpacs-core.el` from the jetpacs repo's root, put both somewhere on
+`load-path`, and:
+
+```elisp
+(require 'jetpacs-core)
+(require 'orgzly)
+(setq orgzly-directory "~/org")   ; where your notebooks live
+M-x jetpacs-connect
+```
+
+**On the phone (/sdcard adoption).** If your device init is the Jetpacs
+starter init (`jetpacs/docs/starter-init.el`), just download `orgzly.el`
+on the phone — the browser saves to `/sdcard/Download`, or copy it to
+`/sdcard/Documents` — then add `"orgzly.el"` to the starter init's
+bundle adopt list and `(require 'orgzly)` after the core. On startup the
+newest staged copy is adopted into `~/.emacs.d/elisp/` automatically;
+updating the app is just downloading the file again.
+
+**From source.** Point `load-path` at the checkout:
+
+```elisp
+(add-to-list 'load-path "~/src/orgzly-native/jetpacs/emacs/core")
+(add-to-list 'load-path "~/src/orgzly-native/emacs/apps/orgzly")
+(require 'orgzly)
+(setq orgzly-directory "~/org")
+M-x jetpacs-connect
+```
 
 Development is live: `eval-buffer` against a connected phone updates
-the app in place.
+the app in place. After editing sources, regenerate the bundle:
+
+```sh
+emacs --batch -l emacs/build-bundle.el   # rewrites orgzly.el
+```
 
 ## Tests
 
