@@ -83,6 +83,31 @@ Bring the slides
    (orgzly-views-test--build-and-lint "orgzly.book")
    (orgzly-ui--reset-drill-in)))
 
+(ert-deftest orgzly-views-narrow-and-cycle ()
+  "Narrowing keeps just the subtree; the fold cycle renames fold ids."
+  (orgzly-views-test--with-app
+   (setq orgzly-ui--current-book "gtd"
+         orgzly-ui--narrow-ref
+         (orgzly-data-entry-ref
+          (cl-find "Projects" (orgzly-data-entries "gtd")
+                   :key (lambda (e) (alist-get 'title e)) :test #'equal)))
+   (let ((strings (orgzly-views-test--strings
+                   (orgzly-views-test--build-and-lint "orgzly.book"))))
+     (should (cl-some (lambda (s) (string-match-p "Projects" s)) strings))
+     (should (cl-some (lambda (s) (string-match-p "Ship report" s)) strings))
+     ;; Outside the subtree: gone.
+     (should-not (cl-some (lambda (s) (string-match-p "Call mom" s)) strings))
+     ;; Widen affordance present.
+     (should (member "Widen view" strings)))
+   ;; The visibility cycle bumps the generation into every fold id.
+   (let ((orgzly-ui--fold-generation 3)
+         (orgzly-ui--fold-all t))
+     (let ((strings (orgzly-views-test--strings
+                     (orgzly-views-test--build-and-lint "orgzly.book"))))
+       (should (cl-some (lambda (s) (string-prefix-p "orgzly-fold:3:" s))
+                        strings))))
+   (orgzly-ui--reset-drill-in)))
+
 (ert-deftest orgzly-views-getting-started ()
   "Empty books view offers the import; the imported tutorial renders."
   (orgzly-views-test--with-app
@@ -259,6 +284,18 @@ and multi-select mode renders (and lints) on both query views."
                    (orgzly-views-test--build-and-lint "orgzly.books"))))
      (should (member "Inbox" strings))
      (should (member "inbox" strings)))))
+
+(ert-deftest orgzly-views-saved-searches-round-trip ()
+  "Export writes JSON beside the notebooks; import reads it back."
+  (orgzly-views-test--with-app
+   (cl-letf (((symbol-function 'orgzly-search--persist) #'ignore))
+     (let ((orgzly-saved-searches '(("Mine" . "t.work ad.3")
+                                    ("Todo" . "i.todo"))))
+       (should (file-exists-p (orgzly-search-export)))
+       (setq orgzly-saved-searches nil)
+       (should (= (orgzly-search-import) 2))
+       (should (equal orgzly-saved-searches
+                      '(("Mine" . "t.work ad.3") ("Todo" . "i.todo"))))))))
 
 ;; ─── Drawer ──────────────────────────────────────────────────────────────────
 

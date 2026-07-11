@@ -864,11 +864,19 @@ SCHEDULED → `warning')."
                ;; follow their digits with `-', `:' or space, not a
                ;; repeater unit letter.
                (warning (and (string-match "\\(--?[0-9]+[hdwmy]\\)" raw)
-                             (match-string 1 raw))))
+                             (match-string 1 raw)))
+               ;; A date range's second stamp: <a>--<b> or [a]--[b].
+               (range-end (and (string-match
+                                "--\\(<[^>\n]+>\\|\\[[^]\n]+\\]\\)" raw)
+                               (condition-case nil
+                                   (float-time (org-time-string-to-time
+                                                (match-string 1 raw)))
+                                 (error nil)))))
           `((time . ,(float-time time))
             (has-time . ,has-time)
             (raw . ,raw)
             (repeater . ,repeater)
+            ,@(when range-end `((range-end . ,range-end)))
             ,@(when end-hhmm
                 (let ((d (decode-time time)))
                   `((end-time . ,(float-time
@@ -1517,6 +1525,16 @@ Orgzly shows the full content, so the cap defaults off."
 (defvar orgzly-ui--focus-ref nil
   "Ref of a note the book view should scroll into view (upstream's focus).")
 
+(defvar orgzly-ui--narrow-ref nil
+  "Ref whose subtree the book view is narrowed to, or nil (upstream's narrow).")
+
+(defvar orgzly-ui--fold-generation 0
+  "Bumped by the visibility cycle: fold state lives on-device keyed by
+collapsible id, so new ids are the only way to reset it.")
+
+(defvar orgzly-ui--fold-all nil
+  "Non-nil while the visibility cycle has everything folded.")
+
 (defun orgzly-ui--reset-drill-in (&optional _view)
   "Clear all drill-in state (used when the user lands on a tab)."
   (setq orgzly-ui--current-book nil
@@ -1524,7 +1542,8 @@ Orgzly shows the full content, so the cap defaults off."
         orgzly-ui--preface-book nil
         orgzly-ui--select-mode nil
         orgzly-ui--selection nil
-        orgzly-ui--focus-ref nil))
+        orgzly-ui--focus-ref nil
+        orgzly-ui--narrow-ref nil))
 
 (add-hook 'jetpacs-shell-view-switched-hook #'orgzly-ui--reset-drill-in)
 (add-hook 'jetpacs-shell-refresh-hook #'orgzly-data-invalidate)
@@ -1735,6 +1754,7 @@ selection in multi-select mode)."
     ("refile"      "Refile"      "move_to_inbox"       "orgzly.note.refile")
     ("archive"     "Archive"     "archive"             "orgzly.note.archive")
     ("focus"       "Focus"       "center_focus_strong" "orgzly.note.focus")
+    ("narrow"      "Narrow"      "crop_free"           "orgzly.note.narrow")
     ("clock-in"    "Clock in"    "play_circle"         "orgzly.note.clock-in")
     ("clock-out"   "Clock out"   "stop_circle"         "orgzly.note.clock-out")
     ("clock-cancel" "Cancel clock" "cancel"            "orgzly.note.clock-cancel")
@@ -1774,7 +1794,7 @@ selection in multi-select mode)."
      (apply #'jetpacs-flow-row
             (mapcar btn '("new-above" "new-under" "new-below")))
      (apply #'jetpacs-flow-row
-            (mapcar btn '("refile" "archive" "focus")))
+            (mapcar btn '("refile" "archive" "focus" "narrow")))
      (jetpacs-divider)
      (apply #'jetpacs-flow-row
             (mapcar btn '("clock-in" "clock-out" "clock-cancel")))
@@ -1924,12 +1944,13 @@ fold on-device, and swipe or long-press opens the quick-action popup."
          (quick (jetpacs-action "orgzly.note.quick" :args ref
                              :when-offline "drop")))
     (let ((node (jetpacs-collapsible
-                 (format "orgzly-fold:%s:%s"
+                 (format "orgzly-fold:%d:%s:%s" orgzly-ui--fold-generation
                          (alist-get 'file entry) (alist-get 'pos entry))
                  (orgzly-ui--note-row entry
                                       :hide-content (not orgzly-display-content))
                  (delq nil (cons content (mapcar #'orgzly-ui--note-node children)))
-                 :collapsed (and (null children) (null content))
+                 :collapsed (or orgzly-ui--fold-all
+                                (and (null children) (null content)))
                  :on-long-tap quick
                  :on-swipe quick)))
       (if (and orgzly-ui--focus-ref
@@ -2043,17 +2064,48 @@ non-keyword prose rendered as org text.  Tap opens the preface editor."
                             :args `((book . ,book))
                             :when-offline "drop")))))
 
+(defun orgzly-ui--narrowed-entries (entries ref)
+  "REF's subtree within document-ordered ENTRIES, or nil when gone.
+Falls back to matching by title when positions have drifted."
+  (when-let ((idx (or (cl-position-if
+                       (lambda (e)
+                         (and (equal (alist-get 'file e) (alist-get 'file ref))
+                              (eql (alist-get 'pos e) (alist-get 'pos ref))))
+                       entries)
+                      (cl-position-if
+                       (lambda (e)
+                         (and (equal (alist-get 'file e) (alist-get 'file ref))
+                              (equal (alist-get 'title e)
+                                     (alist-get 'title ref))))
+                       entries))))
+    (let* ((root (nth idx entries))
+           (level (alist-get 'level root)))
+      (cons root
+            (cl-loop for e in (nthcdr (1+ idx) entries)
+                     while (> (alist-get 'level e) level)
+                     collect e)))))
+
 (defun orgzly-ui--book-body ()
   (let* ((book orgzly-ui--current-book)
-         (entries (orgzly-data-entries book)))
+         (entries (orgzly-data-entries book))
+         (narrowed (and orgzly-ui--narrow-ref
+                        (orgzly-ui--narrowed-entries
+                         entries orgzly-ui--narrow-ref))))
     (apply #'jetpacs-lazy-column
            (delq nil
                  (append
                   (when orgzly-ui--select-mode
                     (list (orgzly-ui--selection-bar)))
-                  (list (orgzly-ui--preface-node book))
+                  ;; Narrowed: just the subtree, no preface (upstream's
+                  ;; narrow-to-subtree); the top bar carries the widen.
+                  (unless narrowed
+                    (list (orgzly-ui--preface-node book)))
                   (or (mapcar #'orgzly-ui--note-node
-                              (orgzly-ui--forest-of entries 1))
+                              (orgzly-ui--forest-of
+                               (or narrowed entries)
+                               (if narrowed
+                                   (alist-get 'level (car narrowed))
+                                 1)))
                       (list (jetpacs-empty-state
                              :icon "note_add" :title "No notes"
                              :caption "Tap + to add the first note"
@@ -2068,13 +2120,26 @@ non-keyword prose rendered as org text.  Tap opens the preface editor."
      (or orgzly-ui--current-book "Book"))
    (orgzly-ui--book-body)
    :back-to "orgzly.books"
-   :actions (list
-             (jetpacs-icon-button "search" (jetpacs-shell-switch-view "orgzly.search")
-                               :content-description "Search")
-             (jetpacs-icon-button (if orgzly-ui--select-mode "close" "checklist")
-                               (jetpacs-action "orgzly.book.select-mode"
-                                            :when-offline "drop")
-                               :content-description "Select notes"))
+   :actions (delq nil
+                  (list
+                   (when orgzly-ui--narrow-ref
+                     (jetpacs-icon-button
+                      "zoom_out_map"
+                      (jetpacs-action "orgzly.book.widen" :when-offline "drop")
+                      :content-description "Widen view"))
+                   (jetpacs-icon-button
+                    (if orgzly-ui--fold-all "unfold_more" "unfold_less")
+                    (jetpacs-action "orgzly.book.cycle-visibility"
+                                 :when-offline "drop")
+                    :content-description "Cycle visibility")
+                   (jetpacs-icon-button "search"
+                                     (jetpacs-shell-switch-view "orgzly.search")
+                                     :content-description "Search")
+                   (jetpacs-icon-button (if orgzly-ui--select-mode
+                                            "close" "checklist")
+                                     (jetpacs-action "orgzly.book.select-mode"
+                                                  :when-offline "drop")
+                                     :content-description "Select notes")))
    :fab (unless orgzly-ui--select-mode
           (jetpacs-fab "add" :on-tap (jetpacs-action
                                    "orgzly.note.new"
@@ -2255,6 +2320,9 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
       (jetpacs-menu-item "Archive"
                       (orgzly-ui--note-action "orgzly.note.archive" ref)
                       :icon "archive")
+      (jetpacs-menu-item "Sort content lines"
+                      (orgzly-ui--note-action "orgzly.note.sort-content" ref)
+                      :icon "sort_by_alpha")
       (jetpacs-menu-item "Clock in"
                       (orgzly-ui--note-action "orgzly.note.clock-in" ref)
                       :icon "play_circle")
@@ -2525,8 +2593,34 @@ time (keeping the date) or just the end."
   (lambda (args _)
     (setq orgzly-ui--current-book (alist-get 'book args)
           orgzly-ui--note-ref nil
-          orgzly-ui--preface-book nil)
+          orgzly-ui--preface-book nil
+          orgzly-ui--narrow-ref nil)
     (jetpacs-shell-push nil :switch-to "orgzly.book")))
+
+(jetpacs-defaction "orgzly.note.narrow"
+  ;; Upstream's narrow-to-subtree: the book view keeps just this
+  ;; subtree until widened.
+  (lambda (args _)
+    (let ((ref (orgzly-ui--args-ref args)))
+      (setq orgzly-ui--current-book (orgzly-data-book-name
+                                     (alist-get 'file ref))
+            orgzly-ui--note-ref nil
+            orgzly-ui--narrow-ref ref)
+      (jetpacs-shell-push nil :switch-to "orgzly.book"))))
+
+(jetpacs-defaction "orgzly.book.widen"
+  (lambda (_ _)
+    (setq orgzly-ui--narrow-ref nil)
+    (jetpacs-shell-push)))
+
+(jetpacs-defaction "orgzly.book.cycle-visibility"
+  ;; Fold state lives on-device keyed by collapsible id; bumping the
+  ;; generation renames every id, so the pushed :collapsed defaults
+  ;; take effect (fold all ↔ unfold all).
+  (lambda (_ _)
+    (setq orgzly-ui--fold-all (not orgzly-ui--fold-all)
+          orgzly-ui--fold-generation (1+ orgzly-ui--fold-generation))
+    (jetpacs-shell-push)))
 
 (jetpacs-defaction "orgzly.book.new"
   (lambda (_ _)
@@ -2903,6 +2997,18 @@ time (keeping the date) or just the end."
     (orgzly-data-copy-note (orgzly-ui--args-ref args))
     (orgzly-ui--after-mutation "Copied")))
 
+(jetpacs-defaction "orgzly.note.sort-content"
+  ;; Upstream's "Sort note's content" — alphabetical over the lines.
+  (lambda (args _)
+    (let* ((ref (orgzly-ui--args-ref args))
+           (entry (orgzly-ui--entry-for-ref ref))
+           (content (and entry (alist-get 'content entry))))
+      (when (and (stringp content) (not (string-empty-p content)))
+        (orgzly-data-set-content
+         ref (string-join (sort (split-string content "\n") #'string-lessp)
+                          "\n"))
+        (orgzly-ui--after-mutation "Sorted")))))
+
 (jetpacs-defaction "orgzly.note.clock-in"
   (lambda (args _)
     (orgzly-data-clock-in (orgzly-ui--args-ref args))
@@ -3188,11 +3294,22 @@ time (keeping the date) or just the end."
 
 (defun orgzly-agenda--occurrences (ts window-start window-end &optional no-overdue)
   "Occurrence float-times of TS within [WINDOW-START, WINDOW-END).
-A repeating timestamp contributes every repetition inside the window;
-a base time before WINDOW-START contributes one overdue occurrence
-(the base itself) unless NO-OVERDUE."
+A repeating timestamp contributes every repetition inside the window; a
+`<a>--<b>' range fills every day of the range (upstream gives a
+repeater-less range a synthetic daily catch-up); a base time before
+WINDOW-START contributes one overdue occurrence (the base itself)
+unless NO-OVERDUE."
   (when-let ((time (alist-get 'time ts)))
-    (let ((rep (orgzly-agenda--parse-repeater (alist-get 'repeater ts))))
+    (let* ((range-end (alist-get 'range-end ts))
+           (rep (or (orgzly-agenda--parse-repeater (alist-get 'repeater ts))
+                    (and range-end '(day . 1))))
+           ;; A range never expands past its own end (exclusive of the
+           ;; day after the range's last day).
+           (window-end (if range-end
+                           (min window-end
+                                (orgzly-agenda--day-start
+                                 1 (seconds-to-time range-end)))
+                         window-end)))
       (cond
        ((null rep)
         (cond ((and (< time window-start) (not no-overdue)) (list time))
@@ -3475,6 +3592,36 @@ outline — swipe or long-press opens the quick-action popup."
 (defun orgzly-search--persist ()
   (customize-save-variable 'orgzly-saved-searches orgzly-saved-searches))
 
+(defconst orgzly-search-export-file "saved-searches.json"
+  "File under `orgzly-directory' the searches export/import round-trips.
+Living beside the notebooks, it rides whatever syncs them.")
+
+(defun orgzly-search-export ()
+  "Write the saved searches to `orgzly-search-export-file'; return it."
+  (let ((file (expand-file-name orgzly-search-export-file orgzly-directory)))
+    (with-temp-file file
+      (insert (json-serialize
+               (vconcat (mapcar (lambda (ss)
+                                  (list :name (car ss) :query (cdr ss)))
+                                orgzly-saved-searches)))))
+    file))
+
+(defun orgzly-search-import ()
+  "Replace the saved searches from `orgzly-search-export-file'.
+Returns how many were imported, or nil when the file is missing."
+  (let ((file (expand-file-name orgzly-search-export-file orgzly-directory)))
+    (when (file-readable-p file)
+      (let ((data (with-temp-buffer
+                    (insert-file-contents file)
+                    (json-parse-buffer :object-type 'alist))))
+        (setq orgzly-saved-searches
+              (mapcar (lambda (e)
+                        (cons (format "%s" (alist-get 'name e))
+                              (format "%s" (alist-get 'query e))))
+                      (append data nil)))
+        (orgzly-search--persist)
+        (length orgzly-saved-searches)))))
+
 (defvar orgzly-search--query ""
   "The last submitted query string.")
 
@@ -3596,9 +3743,17 @@ outline — swipe or long-press opens the quick-action popup."
                                     :icon "delete")))
                   :align "center")))))
            orgzly-saved-searches)
-          (list (jetpacs-button "Add search"
-                             (jetpacs-action "orgzly.search.add")
-                             :icon "add" :variant "tonal")))))
+          (list (jetpacs-row
+                 (jetpacs-button "Add search"
+                              (jetpacs-action "orgzly.search.add")
+                              :icon "add" :variant "tonal")
+                 (jetpacs-button "Export"
+                              (jetpacs-action "orgzly.search.export")
+                              :icon "upload" :variant "text")
+                 (jetpacs-button "Import"
+                              (jetpacs-action "orgzly.search.import")
+                              :icon "download" :variant "text")
+                 :spacing 8 :align "center")))))
 
 (defun orgzly-search--manage-view (snackbar)
   (jetpacs-shell-nav-view "Searches" (orgzly-search--manage-body)
@@ -3709,6 +3864,22 @@ outline — swipe or long-press opens the quick-action popup."
               (assoc-delete-all name orgzly-saved-searches))
         (orgzly-search--persist)
         (jetpacs-shell-push)))))
+
+(jetpacs-defaction "orgzly.search.export"
+  (lambda (_ _)
+    (jetpacs-shell-notify (format "Exported to %s" (orgzly-search-export)))
+    (jetpacs-shell-push)))
+
+(jetpacs-defaction "orgzly.search.import"
+  (lambda (_ _)
+    (if (not (file-readable-p (expand-file-name orgzly-search-export-file
+                                                orgzly-directory)))
+        (jetpacs-shell-notify (format "No %s in %s"
+                                   orgzly-search-export-file orgzly-directory))
+      (when (y-or-n-p "Replace saved searches from the export file? ")
+        (jetpacs-shell-notify (format "Imported %d searches"
+                                   (orgzly-search-import)))))
+    (jetpacs-shell-push)))
 
 (provide 'orgzly-search)
 ;;; orgzly-search.el ends here

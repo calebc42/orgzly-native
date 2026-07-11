@@ -40,6 +40,36 @@
 (defun orgzly-search--persist ()
   (customize-save-variable 'orgzly-saved-searches orgzly-saved-searches))
 
+(defconst orgzly-search-export-file "saved-searches.json"
+  "File under `orgzly-directory' the searches export/import round-trips.
+Living beside the notebooks, it rides whatever syncs them.")
+
+(defun orgzly-search-export ()
+  "Write the saved searches to `orgzly-search-export-file'; return it."
+  (let ((file (expand-file-name orgzly-search-export-file orgzly-directory)))
+    (with-temp-file file
+      (insert (json-serialize
+               (vconcat (mapcar (lambda (ss)
+                                  (list :name (car ss) :query (cdr ss)))
+                                orgzly-saved-searches)))))
+    file))
+
+(defun orgzly-search-import ()
+  "Replace the saved searches from `orgzly-search-export-file'.
+Returns how many were imported, or nil when the file is missing."
+  (let ((file (expand-file-name orgzly-search-export-file orgzly-directory)))
+    (when (file-readable-p file)
+      (let ((data (with-temp-buffer
+                    (insert-file-contents file)
+                    (json-parse-buffer :object-type 'alist))))
+        (setq orgzly-saved-searches
+              (mapcar (lambda (e)
+                        (cons (format "%s" (alist-get 'name e))
+                              (format "%s" (alist-get 'query e))))
+                      (append data nil)))
+        (orgzly-search--persist)
+        (length orgzly-saved-searches)))))
+
 (defvar orgzly-search--query ""
   "The last submitted query string.")
 
@@ -161,9 +191,17 @@
                                     :icon "delete")))
                   :align "center")))))
            orgzly-saved-searches)
-          (list (jetpacs-button "Add search"
-                             (jetpacs-action "orgzly.search.add")
-                             :icon "add" :variant "tonal")))))
+          (list (jetpacs-row
+                 (jetpacs-button "Add search"
+                              (jetpacs-action "orgzly.search.add")
+                              :icon "add" :variant "tonal")
+                 (jetpacs-button "Export"
+                              (jetpacs-action "orgzly.search.export")
+                              :icon "upload" :variant "text")
+                 (jetpacs-button "Import"
+                              (jetpacs-action "orgzly.search.import")
+                              :icon "download" :variant "text")
+                 :spacing 8 :align "center")))))
 
 (defun orgzly-search--manage-view (snackbar)
   (jetpacs-shell-nav-view "Searches" (orgzly-search--manage-body)
@@ -274,6 +312,22 @@
               (assoc-delete-all name orgzly-saved-searches))
         (orgzly-search--persist)
         (jetpacs-shell-push)))))
+
+(jetpacs-defaction "orgzly.search.export"
+  (lambda (_ _)
+    (jetpacs-shell-notify (format "Exported to %s" (orgzly-search-export)))
+    (jetpacs-shell-push)))
+
+(jetpacs-defaction "orgzly.search.import"
+  (lambda (_ _)
+    (if (not (file-readable-p (expand-file-name orgzly-search-export-file
+                                                orgzly-directory)))
+        (jetpacs-shell-notify (format "No %s in %s"
+                                   orgzly-search-export-file orgzly-directory))
+      (when (y-or-n-p "Replace saved searches from the export file? ")
+        (jetpacs-shell-notify (format "Imported %d searches"
+                                   (orgzly-search-import)))))
+    (jetpacs-shell-push)))
 
 (provide 'orgzly-search)
 ;;; orgzly-search.el ends here

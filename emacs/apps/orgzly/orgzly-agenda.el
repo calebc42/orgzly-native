@@ -66,11 +66,22 @@
 
 (defun orgzly-agenda--occurrences (ts window-start window-end &optional no-overdue)
   "Occurrence float-times of TS within [WINDOW-START, WINDOW-END).
-A repeating timestamp contributes every repetition inside the window;
-a base time before WINDOW-START contributes one overdue occurrence
-(the base itself) unless NO-OVERDUE."
+A repeating timestamp contributes every repetition inside the window; a
+`<a>--<b>' range fills every day of the range (upstream gives a
+repeater-less range a synthetic daily catch-up); a base time before
+WINDOW-START contributes one overdue occurrence (the base itself)
+unless NO-OVERDUE."
   (when-let ((time (alist-get 'time ts)))
-    (let ((rep (orgzly-agenda--parse-repeater (alist-get 'repeater ts))))
+    (let* ((range-end (alist-get 'range-end ts))
+           (rep (or (orgzly-agenda--parse-repeater (alist-get 'repeater ts))
+                    (and range-end '(day . 1))))
+           ;; A range never expands past its own end (exclusive of the
+           ;; day after the range's last day).
+           (window-end (if range-end
+                           (min window-end
+                                (orgzly-agenda--day-start
+                                 1 (seconds-to-time range-end)))
+                         window-end)))
       (cond
        ((null rep)
         (cond ((and (< time window-start) (not no-overdue)) (list time))

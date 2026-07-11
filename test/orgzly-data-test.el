@@ -346,6 +346,19 @@ Inbox preface text.
    (orgzly-data-paste-note "inbox")
    (should (orgzly-data-test--entry "Water plants" "inbox"))))
 
+(ert-deftest orgzly-data-parse-ts-range ()
+  "A <a>--<b> range keeps its end alongside the start."
+  (let ((ts (orgzly-data--parse-ts
+             "<2026-07-10 Fri>--<2026-07-12 Sun>")))
+    (should (equal (format-time-string
+                    "%m-%d" (seconds-to-time (alist-get 'time ts)))
+                   "07-10"))
+    (should (equal (format-time-string
+                    "%m-%d" (seconds-to-time (alist-get 'range-end ts)))
+                   "07-12")))
+  (should-not (alist-get 'range-end
+                         (orgzly-data--parse-ts "<2026-07-10 Fri 10:00-12:00>"))))
+
 (defun orgzly-data-test--file-string (book)
   (with-temp-buffer
     (insert-file-contents (orgzly-data-book-file book))

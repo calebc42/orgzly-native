@@ -217,6 +217,20 @@ unless grouping overdue scheduled notes with today is on."
                               now daily t)))
                    "07-13"))))
 
+(ert-deftest orgzly-agenda-multi-day-range ()
+  "A <a>--<b> range fills every day of the range inside the window."
+  (let* ((ws (orgzly-agenda--day-start 0 orgzly-agenda-test--now))
+         (we (orgzly-agenda--day-start 7 orgzly-agenda-test--now))
+         ;; Jul 10 through Jul 12: three daily occurrences.
+         (ranged (append (orgzly-agenda-test--ts 2026 7 10)
+                         `((range-end
+                            . ,(float-time (encode-time 0 0 0 12 7 2026))))))
+         (occs (orgzly-agenda--occurrences ranged ws we t)))
+    (should (equal (mapcar (lambda (o)
+                             (format-time-string "%m-%d" (seconds-to-time o)))
+                           occs)
+                   '("07-10" "07-11" "07-12")))))
+
 (ert-deftest orgzly-agenda-deadline-warning-period ()
   "A warned deadline enters the agenda early, at max(today, due - warning)."
   (let* ((ctx (orgzly-agenda-test--ctx))

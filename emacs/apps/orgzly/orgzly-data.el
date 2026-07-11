@@ -357,11 +357,19 @@ SCHEDULED → `warning')."
                ;; follow their digits with `-', `:' or space, not a
                ;; repeater unit letter.
                (warning (and (string-match "\\(--?[0-9]+[hdwmy]\\)" raw)
-                             (match-string 1 raw))))
+                             (match-string 1 raw)))
+               ;; A date range's second stamp: <a>--<b> or [a]--[b].
+               (range-end (and (string-match
+                                "--\\(<[^>\n]+>\\|\\[[^]\n]+\\]\\)" raw)
+                               (condition-case nil
+                                   (float-time (org-time-string-to-time
+                                                (match-string 1 raw)))
+                                 (error nil)))))
           `((time . ,(float-time time))
             (has-time . ,has-time)
             (raw . ,raw)
             (repeater . ,repeater)
+            ,@(when range-end `((range-end . ,range-end)))
             ,@(when end-hhmm
                 (let ((d (decode-time time)))
                   `((end-time . ,(float-time

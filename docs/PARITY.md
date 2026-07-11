@@ -13,13 +13,13 @@ stock jetpacs renderer; every feature below is elisp in
 | Orgzly area | Orgzly capability | orgzly-native status |
 |---|---|---|
 | Notebooks | list, create, rename, delete, preface, `#+TITLE` cards, file tags, default notebook | ✅ `orgzly-books`/`orgzly-data`: books = `.org` files in `orgzly-directory`; Orgzly's book cards (`#+TITLE` headline with filename subtitle, icon-led mtime/count lines); create/rename/delete via menus (bridged prompts); preface viewer/editor; File tags dialog writing `#+FILETAGS:` (inherited by every note, `t.` searches see them); default book (★) via menu |
-| Note list | outline per book, fold, state/priority/tags shown, planning under title, content shown inline, content line count | ✅ `book` drill-in follows `item_head`: flat foldable outline (client-side fold state, chevron ▸/▾ per note), `STATE  #A  Title  tags` titles with Orgzly's red-open/green-done keywords, done/archived rows faded (45%-alpha emulation), icon-led planning lines (scheduled/deadline/event/closed, Orgzly time format), inline org-highlighted content preview that folds with the subtree, line count when content hidden |
+| Note list | outline per book, fold, narrow/widen, cycle visibility, state/priority/tags shown, planning under title, content shown inline, content line count | ✅ `book` drill-in follows `item_head`: flat foldable outline (client-side fold state, chevron ▸/▾ per note), narrow-to-subtree from the popup with a Widen top-bar button, whole-book visibility cycle (fold-id generations reset the on-device fold state), `STATE  #A  Title  tags` titles with Orgzly's red-open/green-done keywords, done/archived rows faded whole (45%-alpha emulation), icon-led planning lines (scheduled/deadline/event/closed, Orgzly time format), inline org-highlighted content preview that folds with the subtree, line count when content hidden |
 | Note popup | swipe a note → quick-action buttons (schedule, deadline, state, done, new, refile, clock, focus, delete…) | ✅ swipe or long-press any note row — on the book outline, search results, and the agenda — → quick-action dialog: Schedule/Deadline date pickers, State, Done, New above/under/below, Refile, Archive, Focus (jump to the note in its book, scrolled into view), Clock in/out/cancel, Cut/Copy/Paste below, Delete |
-| Note editor | breadcrumbs, notebook row, inline title, icon metadata rows with ×-clear, timestamp dialog, tags, properties, content | ✅ `note` view mirrors `fragment_note`: tappable breadcrumbs (book › ancestors), notebook row (tap = refile), inline title field, icon-led metadata rows (tags / state / priority / scheduled / deadline / closed) each with × to clear, Orgzly-style timestamp dialog (date + time + repeater + clear), tag-picker dialog with add, property add/delete, org-highlighted content editor with the org keyboard toolbar; the timestamp dialog carries date (with Today/Tomorrow/Next-week shortcuts), time (×-drop keeps the date), end time, repeater, and the warning/delay cookie, every cookie round-tripping through edits; the CLOSED row edits and clears like upstream's; clock in/out/cancel in the overflow menu. ⚠ no save/discard-modified flow (mutations commit instantly) |
+| Note editor | breadcrumbs, notebook row, inline title, icon metadata rows with ×-clear, timestamp dialog, tags, properties, content | ✅ `note` view mirrors `fragment_note`: tappable breadcrumbs (book › ancestors), notebook row (tap = refile), inline title field, icon-led metadata rows (tags / state / priority / scheduled / deadline / closed) each with × to clear, Orgzly-style timestamp dialog (date + time + repeater + clear), tag-picker dialog with add, property add/delete, org-highlighted content editor with the org keyboard toolbar; the timestamp dialog carries date (with Today/Tomorrow/Next-week shortcuts), time (×-drop keeps the date), end time, repeater, and the warning/delay cookie, every cookie round-tripping through edits; the CLOSED row edits and clears like upstream's; clock in/out/cancel and sort-content-lines in the overflow menu. ⚠ no save/discard-modified flow (mutations commit instantly) |
 | Structure ops | promote/demote, move up/down, cut/copy/paste, delete, refile to book, archive | ✅ all, from the editor's overflow menu and the quick-action popup; delete confirms; refile via bridged book picker; paste below note or into book |
 | Multi-select | batch state/schedule/deadline/refile/archive/delete + the "move" CAB (promote/demote/up/down) + cut/copy, count in the top bar | ✅ select mode toggle on the book, search, and agenda views: per-row checkboxes, "N selected" top-bar title (book), action bar with State / Done / Schedule / Deadline / Refile / Archive / Delete plus Promote / Demote / Up / Down / Cut / Copy / Clock in/out/cancel (order-aware so positions stay valid; batch cut/copy is one paste-able block) |
 | Search language | `b. i. it. p. ps. t. tn. s. d. e. c. cr.` with `eq/ne/lt/le/gt/ge`, intervals (`none now today tomorrow yesterday ±Nh/d/w/m/y`), `.`‑negation, quoting, parens, and/or with AND-precedence, `o.*` sort, `ad.N` | ✅ `orgzly-query.el` is a port of QueryTokenizer/QueryParser/DottedQueryParser incl. the implicit-AND-inside-OR regrouping; matcher mirrors SqliteQueryBuilder (LIKE-style substring tags/text, default priority for `p.`, state classes from org config, per-event matching with range ends, per-unit boundary truncation, upstream's timed-before-all-day and priority-tiebreak sort order) — 27 dedicated tests |
-| Saved searches | seeded defaults, CRUD, ordering | ✅ same four defaults (`Agenda`, `Next 3 days`, `Scheduled`, `To Do`); Searches drill-in with add/rename/edit query/reorder/delete; persisted via Customize |
+| Saved searches | seeded defaults, CRUD, ordering, import/export | ✅ same four defaults (`Agenda`, `Next 3 days`, `Scheduled`, `To Do`); Searches drill-in with add/rename/edit query/reorder/delete plus JSON export/import (a `saved-searches.json` beside the notebooks, so it rides their sync); persisted via Customize |
 | Agenda | `ad.N` day buckets, repeater expansion, leading Overdue section, group-scheduled-with-today, hide empty days | ✅ agenda tab with saved-search chips; occurrences expanded (incl. `+`/`++`/`.+` repeaters, calendar-aware month/year steps); Overdue section first with "N days overdue" in red, `orgzly-agenda-group-scheduled-with-today` moves overdue scheduled under Today; rows are the standard note rows showing only the responsible time, with the quick-action popup and multi-select (as on search results); deadline warning cookies surface the note at max(today, due − warning); `orgzly-agenda-hide-empty-days` |
 | Reminders | scheduled/deadline/event classes with per-class toggles, daily reminder time for date-only notes | ✅ `reminders.set` replace-set (reboot-persisted by the companion), per-class defcustoms, date-only notes remind at `orgzly-reminders-daily-time`, done notes excluded, repeaters expanded. ⚠ **No Done/Snooze buttons on the notification** — the jetpacs reminder frame carries title/body/time only and adding buttons would need Kotlin; tap opens the app. All three classes default on; each note's next future occurrence is armed unbounded (upstream's model), and deadline/event reminders lead by the warning cookie |
 | Home-screen widget | saved-search list widget, checkmark cycles state, day headers | ✅ `widget:agenda` surface: one view per saved search (header-switchable, offline from cache), day dividers for `ad.N` views, todo-cycle button per row. Widget colors/opacity/font-size knobs are companion-side rendering — N/A by design. ⚠ one switchable surface, not per-widget-instance searches; no "+" new-note / open-search-in-app buttons |
@@ -91,23 +91,22 @@ it whole).  Time-shift logging turned out already-covered: every state
 change runs `org-todo`, so org itself writes `LAST_REPEAT` per
 `org-log-repeat` (now a settings row).  Still open:
 
-- **Narrow to subtree / widen**; **cycle visibility** (whole-book fold
-  cycle — fold state lives on-device, so this needs an id-generation
-  scheme to reset it).
+A third round closed narrow-to-subtree/widen, the whole-book
+visibility cycle (fold-id generations), multi-day `<a>--<b>` agenda
+ranges (daily catch-up expansion, capped at the range's end),
+saved-searches JSON import/export, and sort-content-lines.
+
 - **Editor** — save/discard flow with modified detection (mutations
   commit instantly; breadcrumbs navigate without a guard); inline
-  property editing + name autocomplete; sort content lines; insert
-  inline timestamp (needs the client-side cursor); rendered view-mode
-  (checkbox toggle / link taps in content).
-- **Saved-searches import/export**; **share note as text** (needs an
-  outbound-share device capability).
+  property editing + name autocomplete; insert inline timestamp (needs
+  the client-side cursor); rendered view-mode (checkbox toggle / link
+  taps in content).
+- **Share note as text** — needs an outbound-share device capability.
 - **Book export** — ➖ N/A by architecture: a notebook already is a
   plain org file the user owns on disk.
-- **Agenda** — multi-day `<a>--<b>` ranges expand per day upstream;
-  port shows the start day only.  Smaller edges: done notes' overdue
-  occurrences are suppressed (upstream leaves that to the query); a
-  repeating overdue-scheduled note can show twice under Today with
-  group-with-today.
+- **Agenda edges** — done notes' overdue occurrences are suppressed
+  (upstream leaves that to the query); a repeating overdue-scheduled
+  note can show twice under Today with group-with-today.
 - **Widget** — per-widget-instance saved searches; "+" new-note and
   header→open-search-in-app buttons.
 
@@ -121,15 +120,16 @@ owed here either.
 
 ## Test coverage
 
-`test/run-tests.sh` — 78 ERT tests: the query language ported semantics
+`test/run-tests.sh` — 82 ERT tests: the query language ported semantics
 incl. per-event matching and the sort tiebreaks (27), the file-backed
-data layer incl. mutations, cookie parsing and round-trip, CLOSED
-editing, clocking, file tags, sibling creation, batch cut/copy,
-repeater-aware toggling, preface front matter and the Getting Started
-import (26), agenda expansion incl. the Overdue section, deadline
-warning periods and reminder arming/lead (10), and a jetpacs-lint pass
-that builds **every registered view in every drill-in state** plus the
-quick-action/timestamp/tags/filetags dialogs and validates the produced
-widget specs against the wire format, along with title-generator,
-preface-abstraction, book-card-title, query-hit quick-action and drawer
-semantics (15).
+data layer incl. mutations, cookie and range parsing, planning
+round-trip, CLOSED editing, clocking, file tags, sibling creation,
+batch cut/copy, repeater-aware toggling, preface front matter and the
+Getting Started import (27), agenda expansion incl. the Overdue
+section, multi-day ranges, deadline warning periods and reminder
+arming/lead (11), and a jetpacs-lint pass that builds **every
+registered view in every drill-in state** — narrowed and fold-cycled
+included — plus the quick-action/timestamp/tags/filetags dialogs and
+validates the produced widget specs against the wire format, along with
+title-generator, preface-abstraction, book-card-title, query-hit
+quick-action, saved-search round-trip and drawer semantics (17).
