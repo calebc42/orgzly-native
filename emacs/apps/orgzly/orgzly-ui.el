@@ -51,12 +51,18 @@
   "When non-nil, planning times show under note titles."
   :type 'boolean :group 'orgzly)
 
-(defcustom orgzly-display-book-name-in-search t
-  "When non-nil, search and agenda rows show the note's notebook."
-  :type 'boolean :group 'orgzly)
+(defcustom orgzly-display-book-name-in-search 'under
+  "Where search and agenda rows show the note's notebook.
+Orgzly's three placements: nil hides it, `before' puts it above the
+title, `under' (or t) among the metadata lines below."
+  :type '(choice (const :tag "Hide" nil)
+                 (const :tag "Before note" before)
+                 (const :tag "Under note" under))
+  :group 'orgzly)
 
-(defcustom orgzly-content-preview-lines 8
-  "Maximum content lines shown under a title in note lists."
+(defcustom orgzly-content-preview-lines 0
+  "Maximum content lines shown under a title in note lists; 0 = all.
+Orgzly shows the full content, so the cap defaults off."
   :type 'integer :group 'orgzly)
 
 ;; ─── Drill-in state ──────────────────────────────────────────────────────────
@@ -76,13 +82,17 @@
 (defvar orgzly-ui--selection nil
   "Refs of the notes selected in multi-select mode.")
 
+(defvar orgzly-ui--focus-ref nil
+  "Ref of a note the book view should scroll into view (upstream's focus).")
+
 (defun orgzly-ui--reset-drill-in (&optional _view)
   "Clear all drill-in state (used when the user lands on a tab)."
   (setq orgzly-ui--current-book nil
         orgzly-ui--note-ref nil
         orgzly-ui--preface-book nil
         orgzly-ui--select-mode nil
-        orgzly-ui--selection nil))
+        orgzly-ui--selection nil
+        orgzly-ui--focus-ref nil))
 
 (add-hook 'jetpacs-shell-view-switched-hook #'orgzly-ui--reset-drill-in)
 (add-hook 'jetpacs-shell-refresh-hook #'orgzly-data-invalidate)
@@ -123,6 +133,10 @@
 (defconst orgzly-ui--todo-color "#e53935" "Open keyword color (Orgzly red).")
 (defconst orgzly-ui--done-color "#43a047" "Done keyword color (Orgzly green).")
 (defconst orgzly-ui--muted-color "#8a8a8a" "Secondary text (post-title, times).")
+(defconst orgzly-ui--todo-faded-color "#c98a88"
+  "Open keyword on a faded (done/archived) row — Orgzly's 45% alpha.")
+(defconst orgzly-ui--done-faded-color "#8fbf91"
+  "Done keyword on a faded row.")
 
 (defun orgzly-ui--done-p (entry)
   (let ((kws (orgzly-data-todo-keywords)))
@@ -152,8 +166,12 @@ line-count preference are on."
      (append
       (when state
         (list (jetpacs-span (concat state "  ") :bold t
-                         :color (if done orgzly-ui--done-color
-                                  orgzly-ui--todo-color))))
+                         ;; A faded row fades its keyword too (upstream
+                         ;; alphas the whole row) — desaturated hues.
+                         :color (cond ((and done fade) orgzly-ui--done-faded-color)
+                                      (done orgzly-ui--done-color)
+                                      (fade orgzly-ui--todo-faded-color)
+                                      (t orgzly-ui--todo-color)))))
       (when (alist-get 'priority entry)
         (list (jetpacs-span (format "#%s  " (alist-get 'priority entry))
                          :bold t :color fade)))
@@ -196,7 +214,8 @@ shows only the time responsible for an item's presence."
   (let ((keep (lambda (kind) (or (null only-kind) (eq kind only-kind)))))
     (delq nil
           (list
-           (when (and show-book orgzly-display-book-name-in-search)
+           (when (and show-book
+                      (memq orgzly-display-book-name-in-search '(t under)))
              (orgzly-ui--icon-line "folder_open" (alist-get 'book entry)))
            (when (and orgzly-display-planning (funcall keep 'scheduled))
              (when-let ((ts (alist-get 'scheduled entry)))
@@ -212,18 +231,25 @@ shows only the time responsible for an item's presence."
                (orgzly-ui--icon-line "task_alt" (orgzly-ui--ts-label ts))))))))
 
 (defun orgzly-ui--content-node (entry)
-  "ENTRY's content shown under the title (truncated, org-highlighted), or nil."
+  "ENTRY's content shown under the title (org-highlighted), or nil.
+`orgzly-content-preview-lines' caps it when non-zero (Orgzly shows it
+whole).  On a faded row the content renders as a muted span instead of
+highlighted markup — text-node colors don't reach the wire, so the
+whole-row fade costs the preview its highlighting."
   (when orgzly-display-content
-    (let ((content (alist-get 'content entry)))
+    (let ((content (alist-get 'content entry))
+          (cap orgzly-content-preview-lines))
       (when (and (stringp content) (not (string-empty-p content)))
-        (let ((lines (split-string content "\n")))
-          (jetpacs-markup
-           (if (> (length lines) orgzly-content-preview-lines)
-               (concat (string-join
-                        (seq-take lines orgzly-content-preview-lines) "\n")
-                       "\n…")
-             content)
-           :syntax "org" :style 'caption))))))
+        (let* ((lines (split-string content "\n"))
+               (shown (if (and (> cap 0) (> (length lines) cap))
+                          (concat (string-join (seq-take lines cap) "\n")
+                                  "\n…")
+                        content)))
+          (if (orgzly-ui--faded-p entry)
+              (jetpacs-rich-text
+               (list (jetpacs-span shown :color orgzly-ui--muted-color))
+               :style 'caption)
+            (jetpacs-markup shown :syntax "org" :style 'caption)))))))
 
 (defun orgzly-ui--selected-p (entry)
   (let ((file (alist-get 'file entry)) (pos (alist-get 'pos entry)))
@@ -247,11 +273,19 @@ selection in multi-select mode)."
             (list
              (jetpacs-box
               (list (apply #'jetpacs-column
-                           (cons (orgzly-ui--title-node
-                                  entry :hide-content hide-content)
-                                 (orgzly-ui--meta-lines
-                                  entry :show-book show-book
-                                  :only-kind only-kind))))
+                           (append
+                            ;; "Before note" placement of the notebook
+                            ;; name (Orgzly's third option).
+                            (when (and show-book
+                                       (eq orgzly-display-book-name-in-search
+                                           'before))
+                              (list (orgzly-ui--icon-line
+                                     "folder_open" (alist-get 'book entry))))
+                            (cons (orgzly-ui--title-node
+                                   entry :hide-content hide-content)
+                                  (orgzly-ui--meta-lines
+                                   entry :show-book show-book
+                                   :only-kind only-kind)))))
               :weight 1.0 :padding 4
               :on-tap (if orgzly-ui--select-mode
                           (orgzly-ui--note-action "orgzly.note.select-toggle" ref)
@@ -268,6 +302,10 @@ selection in multi-select mode)."
     ("new-below"   "New below"   "vertical_align_bottom" "orgzly.note.new-below")
     ("refile"      "Refile"      "move_to_inbox"       "orgzly.note.refile")
     ("archive"     "Archive"     "archive"             "orgzly.note.archive")
+    ("focus"       "Focus"       "center_focus_strong" "orgzly.note.focus")
+    ("clock-in"    "Clock in"    "play_circle"         "orgzly.note.clock-in")
+    ("clock-out"   "Clock out"   "stop_circle"         "orgzly.note.clock-out")
+    ("clock-cancel" "Cancel clock" "cancel"            "orgzly.note.clock-cancel")
     ("cut"         "Cut"         "content_cut"         "orgzly.note.cut")
     ("copy"        "Copy"        "content_copy"        "orgzly.note.copy")
     ("paste"       "Paste below" "content_paste"       "orgzly.note.paste")
@@ -304,7 +342,10 @@ selection in multi-select mode)."
      (apply #'jetpacs-flow-row
             (mapcar btn '("new-above" "new-under" "new-below")))
      (apply #'jetpacs-flow-row
-            (mapcar btn '("refile" "archive")))
+            (mapcar btn '("refile" "archive" "focus")))
+     (jetpacs-divider)
+     (apply #'jetpacs-flow-row
+            (mapcar btn '("clock-in" "clock-out" "clock-cancel")))
      (jetpacs-divider)
      (apply #'jetpacs-flow-row
             (mapcar btn '("cut" "copy" "paste" "delete"))))))
@@ -349,6 +390,10 @@ selection in multi-select mode)."
                                                 :args `((book . ,name))
                                                 :when-offline "drop")
                     :icon "notes")
+    (jetpacs-menu-item "File tags…" (jetpacs-action "orgzly.book.edit-filetags"
+                                              :args `((book . ,name))
+                                              :when-offline "drop")
+                    :icon "label")
     (jetpacs-menu-item "Rename…" (jetpacs-action "orgzly.book.rename"
                                            :args `((book . ,name)))
                     :icon "edit")
@@ -360,20 +405,28 @@ selection in multi-select mode)."
                     :icon "delete"))))
 
 (defun orgzly-ui--book-card (b)
-  "One notebook as Orgzly's book card: title plus icon-led detail lines."
-  (let ((name (alist-get 'name b)))
+  "One notebook as Orgzly's book card: title plus icon-led detail lines.
+A book with a #+TITLE shows it as the headline and the filename as a
+muted subtitle, like Orgzly's item_book."
+  (let* ((name (alist-get 'name b))
+         (title (alist-get 'title b)))
     (jetpacs-card
      (list
       (jetpacs-row
        (jetpacs-box
         (list
-         (jetpacs-column
+         (apply
+          #'jetpacs-column
+          (delq nil
+                (list
           (jetpacs-rich-text
            (append
-            (list (jetpacs-span name :bold t))
+            (list (jetpacs-span (or title name) :bold t))
             (when (equal name orgzly-default-book)
               (list (jetpacs-span "  ★" :color orgzly-ui--muted-color))))
            :style 'title)
+          (when title
+            (jetpacs-text name 'caption nil orgzly-ui--muted-color))
           (jetpacs-spacer :height 6)
           (orgzly-ui--icon-line
            "access_time"
@@ -382,7 +435,7 @@ selection in multi-select mode)."
           (orgzly-ui--icon-line
            "format_list_bulleted"
            (format "%d note%s" (alist-get 'count b)
-                   (if (= (alist-get 'count b) 1) "" "s")))))
+                   (if (= (alist-get 'count b) 1) "" "s")))))))
         :weight 1.0
         :on-tap (jetpacs-action "orgzly.book.open"
                              :args `((book . ,name))
@@ -438,13 +491,22 @@ fold on-device, and swipe or long-press opens the quick-action popup."
          (content (orgzly-ui--content-node entry))
          (quick (jetpacs-action "orgzly.note.quick" :args ref
                              :when-offline "drop")))
-    (jetpacs-collapsible
-     (format "orgzly-fold:%s:%s" (alist-get 'file entry) (alist-get 'pos entry))
-     (orgzly-ui--note-row entry :hide-content (not orgzly-display-content))
-     (delq nil (cons content (mapcar #'orgzly-ui--note-node children)))
-     :collapsed (and (null children) (null content))
-     :on-long-tap quick
-     :on-swipe quick)))
+    (let ((node (jetpacs-collapsible
+                 (format "orgzly-fold:%s:%s"
+                         (alist-get 'file entry) (alist-get 'pos entry))
+                 (orgzly-ui--note-row entry
+                                      :hide-content (not orgzly-display-content))
+                 (delq nil (cons content (mapcar #'orgzly-ui--note-node children)))
+                 :collapsed (and (null children) (null content))
+                 :on-long-tap quick
+                 :on-swipe quick)))
+      (if (and orgzly-ui--focus-ref
+               (equal (alist-get 'file entry)
+                      (alist-get 'file orgzly-ui--focus-ref))
+               (eql (alist-get 'pos entry)
+                    (alist-get 'pos orgzly-ui--focus-ref)))
+          (jetpacs-scroll-here node)
+        node))))
 
 (defun orgzly-ui--quick-row (entry header)
   "HEADER wrapped so swipe or long-press opens ENTRY's quick popup.
@@ -499,7 +561,14 @@ batch cut/copy."
      (jetpacs-button "Cut" (jetpacs-action "orgzly.bulk.cut")
                   :variant "text" :icon "content_cut")
      (jetpacs-button "Copy" (jetpacs-action "orgzly.bulk.copy")
-                  :variant "text" :icon "content_copy")))
+                  :variant "text" :icon "content_copy")
+     (jetpacs-button "Clock in" (jetpacs-action "orgzly.bulk.clock-in")
+                  :variant "text" :icon "play_circle")
+     (jetpacs-button "Clock out" (jetpacs-action "orgzly.bulk.clock-out")
+                  :variant "text" :icon "stop_circle")
+     (jetpacs-button "Cancel clock"
+                  (jetpacs-action "orgzly.bulk.clock-cancel")
+                  :variant "text" :icon "cancel")))
    :color "surface_container" :shape "rounded" :padding 4 :fill t))
 
 (defun orgzly-ui--preface-node (book)
@@ -721,8 +790,12 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
                  :on-clear (orgzly-ui--note-action "orgzly.note.plan-clear" ref
                                                    '(kind . "deadline")))
                 (when closed
-                  (orgzly-ui--meta-row "task_alt"
-                                       (orgzly-ui--ts-label closed) "Closed"))
+                  (orgzly-ui--meta-row
+                   "task_alt" (orgzly-ui--ts-label closed) "Closed"
+                   :on-tap (orgzly-ui--note-action "orgzly.note.plan-dialog"
+                                                   ref '(kind . "closed"))
+                   :on-clear (orgzly-ui--note-action "orgzly.note.plan-clear"
+                                                     ref '(kind . "closed"))))
                 (jetpacs-divider)
                 (apply #'jetpacs-column
                        (orgzly-ui--properties-nodes entry))
@@ -750,6 +823,15 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
       (jetpacs-menu-item "Archive"
                       (orgzly-ui--note-action "orgzly.note.archive" ref)
                       :icon "archive")
+      (jetpacs-menu-item "Clock in"
+                      (orgzly-ui--note-action "orgzly.note.clock-in" ref)
+                      :icon "play_circle")
+      (jetpacs-menu-item "Clock out"
+                      (orgzly-ui--note-action "orgzly.note.clock-out" ref)
+                      :icon "stop_circle")
+      (jetpacs-menu-item "Cancel clock"
+                      (orgzly-ui--note-action "orgzly.note.clock-cancel" ref)
+                      :icon "cancel")
       (jetpacs-menu-item "Cut" (orgzly-ui--note-action "orgzly.note.cut" ref)
                       :icon "content_cut")
       (jetpacs-menu-item "Copy" (orgzly-ui--note-action "orgzly.note.copy" ref)
@@ -821,8 +903,10 @@ time (keeping the date) or just the end."
       (list
      (jetpacs-row
       (jetpacs-box
-       (list (jetpacs-text (if (equal kind "deadline")
-                            "Deadline time" "Scheduled time")
+       (list (jetpacs-text (pcase kind
+                          ("deadline" "Deadline time")
+                          ("closed" "Closed time")
+                          (_ "Scheduled time"))
                         'title))
        :weight 1.0)
       (jetpacs-button "Done" (jetpacs-action "dialog.dismiss") :variant "text")
@@ -832,7 +916,10 @@ time (keeping the date) or just the end."
       (append
        (delq nil
              (list
-              (jetpacs-icon (if (equal kind "deadline") "alarm" "today")
+              (jetpacs-icon (pcase kind
+                           ("deadline" "alarm")
+                           ("closed" "task_alt")
+                           (_ "today"))
                          :size 20 :color "outline")
               (jetpacs-date-button (or date "Date")
                                 (jetpacs-action "orgzly.note.plan-date"
@@ -865,17 +952,37 @@ time (keeping the date) or just the end."
                                                  :args (funcall args '(dialog . t)))
                                     :content-description "Remove end time"))))
          '(:spacing 8 :align "center"))))
-     (jetpacs-row
-      (jetpacs-icon "repeat" :size 20 :color "outline")
-      (jetpacs-button (or (alist-get 'repeater parts) "Repeat")
-                   (jetpacs-action "orgzly.note.plan-repeater"
-                                :args (funcall args '(dialog . t)))
-                   :variant "text")
-      (jetpacs-button (or (alist-get 'warning parts) "Warning")
-                   (jetpacs-action "orgzly.note.plan-warning"
-                                :args (funcall args '(dialog . t)))
-                   :variant "text")
-      :spacing 8 :align "center")
+     ;; Orgzly's date shortcuts.
+     (let ((shortcut
+            (lambda (label days)
+              (jetpacs-button label
+                           (jetpacs-action
+                            "orgzly.note.plan-date"
+                            :args (funcall
+                                   args '(dialog . t)
+                                   (cons 'value
+                                         (format-time-string
+                                          "%Y-%m-%d"
+                                          (time-add nil (* days 86400))))))
+                           :variant "text"))))
+       (jetpacs-row
+        (funcall shortcut "Today" 0)
+        (funcall shortcut "Tomorrow" 1)
+        (funcall shortcut "Next week" 7)
+        :spacing 8 :align "center"))
+     ;; A CLOSED stamp carries no repeater or warning.
+     (unless (equal kind "closed")
+       (jetpacs-row
+        (jetpacs-icon "repeat" :size 20 :color "outline")
+        (jetpacs-button (or (alist-get 'repeater parts) "Repeat")
+                     (jetpacs-action "orgzly.note.plan-repeater"
+                                  :args (funcall args '(dialog . t)))
+                     :variant "text")
+        (jetpacs-button (or (alist-get 'warning parts) "Warning")
+                     (jetpacs-action "orgzly.note.plan-warning"
+                                  :args (funcall args '(dialog . t)))
+                     :variant "text")
+        :spacing 8 :align "center"))
      (jetpacs-row
       (jetpacs-spacer :weight 1.0)
       (jetpacs-button "Clear"
@@ -997,6 +1104,35 @@ time (keeping the date) or just the end."
         (jetpacs-shell-notify (format "Created %s" name))
         (jetpacs-shell-push)))))
 
+(defun orgzly-ui--filetags-dialog (book current)
+  "Tag-picker dialog for BOOK's #+FILETAGS: with CURRENT selected."
+  (jetpacs-lazy-column
+   (jetpacs-row
+    (jetpacs-box (list (jetpacs-text "File tags" 'title)) :weight 1.0)
+    (jetpacs-button "Done" (jetpacs-action "dialog.dismiss") :variant "text")
+    :align "center")
+   (jetpacs-enum-list "orgzly-book-filetags"
+                   (orgzly-ui--known-tags)
+                   :value current
+                   :multi-select t :allow-add t
+                   :on-change (jetpacs-action "orgzly.book.set-filetags"
+                                           :args `((book . ,book))))))
+
+(jetpacs-defaction "orgzly.book.edit-filetags"
+  ;; Orgzly's book "File tags" dialog — the tags every note in the
+  ;; book inherits (t. searches see them).
+  (lambda (args _)
+    (let ((book (alist-get 'book args)))
+      (jetpacs-send-dialog
+       (orgzly-ui--filetags-dialog
+        book (alist-get 'filetags (orgzly-data-book-front-matter book)))))))
+
+(jetpacs-defaction "orgzly.book.set-filetags"
+  (lambda (args _)
+    (orgzly-data-set-book-filetags (alist-get 'book args)
+                                   (append (alist-get 'value args) nil))
+    (jetpacs-shell-push)))
+
 (jetpacs-defaction "orgzly.book.import-getting-started"
   ;; Orgzly's "Import Getting Started with Orgzly" (Settings > App):
   ;; create the tutorial notebook; confirm before resetting an existing
@@ -1064,7 +1200,10 @@ time (keeping the date) or just the end."
            (goto-char (point-min))
            (let ((clean (string-trim (or text ""))))
              (unless (string-empty-p clean)
-               (insert clean "\n\n")))))
+               (insert clean "\n\n"))))
+         ;; The preface holds #+ keywords (FILETAGS, TODO…); re-read
+         ;; them so the live buffer's org state sees the edit.
+         (org-set-regexps-and-options))
         (save-buffer))
       (orgzly-data-invalidate)
       (setq orgzly-ui--preface-book nil)
@@ -1332,6 +1471,32 @@ time (keeping the date) or just the end."
     (orgzly-data-copy-note (orgzly-ui--args-ref args))
     (orgzly-ui--after-mutation "Copied")))
 
+(jetpacs-defaction "orgzly.note.clock-in"
+  (lambda (args _)
+    (orgzly-data-clock-in (orgzly-ui--args-ref args))
+    (orgzly-ui--after-mutation "Clocked in")))
+
+(jetpacs-defaction "orgzly.note.clock-out"
+  (lambda (args _)
+    (orgzly-data-clock-out (orgzly-ui--args-ref args))
+    (orgzly-ui--after-mutation "Clocked out")))
+
+(jetpacs-defaction "orgzly.note.clock-cancel"
+  (lambda (args _)
+    (orgzly-data-clock-cancel (orgzly-ui--args-ref args))
+    (orgzly-ui--after-mutation "Clock cancelled")))
+
+(jetpacs-defaction "orgzly.note.focus"
+  ;; Upstream's "focus": jump from a search/agenda hit to the note in
+  ;; its own notebook, scrolled into view.
+  (lambda (args _)
+    (let ((ref (orgzly-ui--args-ref args)))
+      (setq orgzly-ui--current-book (orgzly-data-book-name
+                                     (alist-get 'file ref))
+            orgzly-ui--note-ref nil
+            orgzly-ui--focus-ref ref)
+      (jetpacs-shell-push nil :switch-to "orgzly.book"))))
+
 (jetpacs-defaction "orgzly.note.paste"
   (lambda (args _)
     (let ((book (or (alist-get 'book args)
@@ -1423,6 +1588,18 @@ time (keeping the date) or just the end."
 (jetpacs-defaction "orgzly.bulk.toggle-done"
   (lambda (_ _)
     (orgzly-ui--bulk #'orgzly-data-toggle-done "Toggled" t)))
+
+(jetpacs-defaction "orgzly.bulk.clock-in"
+  (lambda (_ _)
+    (orgzly-ui--bulk #'orgzly-data-clock-in "Clocked in" t)))
+
+(jetpacs-defaction "orgzly.bulk.clock-out"
+  (lambda (_ _)
+    (orgzly-ui--bulk #'orgzly-data-clock-out "Clocked out" t)))
+
+(jetpacs-defaction "orgzly.bulk.clock-cancel"
+  (lambda (_ _)
+    (orgzly-ui--bulk #'orgzly-data-clock-cancel "Clocks cancelled" t)))
 
 (jetpacs-defaction "orgzly.bulk.promote"
   ;; ignore-errors: a top-level note can't promote; skip it, don't

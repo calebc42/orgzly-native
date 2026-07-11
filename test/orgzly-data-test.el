@@ -273,6 +273,37 @@ Inbox preface text.
      (should (alist-get 'created e))     ; CREATED stamped by default
      (should (equal (alist-get 'content e) "details")))))
 
+(ert-deftest orgzly-data-book-filetags ()
+  (orgzly-data-test--with-books
+   ;; Set on a book with no preface: line lands at the top; every note
+   ;; inherits the tags (t. searches see them).
+   (orgzly-data-set-book-filetags "gtd" '("work" "gtd"))
+   (should (equal (alist-get 'filetags (orgzly-data-book-front-matter "gtd"))
+                  '("work" "gtd")))
+   (should (member "work" (mapcar #'substring-no-properties
+                                  (alist-get 'itags
+                                             (orgzly-data-test--entry
+                                              "Call mom")))))
+   ;; Replace, then remove.
+   (orgzly-data-set-book-filetags "gtd" '("home"))
+   (should (equal (alist-get 'filetags (orgzly-data-book-front-matter "gtd"))
+                  '("home")))
+   (orgzly-data-set-book-filetags "gtd" nil)
+   (should-not (orgzly-data-book-front-matter "gtd"))))
+
+(ert-deftest orgzly-data-set-planning-closed ()
+  (orgzly-data-test--with-books
+   (let ((ref (orgzly-data-entry-ref (orgzly-data-test--entry "Loose thought"))))
+     (orgzly-data-set-planning ref 'closed
+                               '((date . "2026-07-01") (time . "10:00")))
+     (let ((ts (alist-get 'closed (orgzly-data-test--entry "Loose thought"))))
+       (should ts)
+       (should (alist-get 'has-time ts))
+       ;; CLOSED stamps are inactive.
+       (should (string-prefix-p "[" (alist-get 'raw ts))))
+     (orgzly-data-set-planning ref 'closed nil)
+     (should-not (alist-get 'closed (orgzly-data-test--entry "Loose thought"))))))
+
 (ert-deftest orgzly-data-new-sibling ()
   (orgzly-data-test--with-books
    ;; Below: same level, directly after the sibling's subtree.
@@ -314,6 +345,35 @@ Inbox preface text.
    (should (orgzly-data-test--entry "Water plants" "gtd"))
    (orgzly-data-paste-note "inbox")
    (should (orgzly-data-test--entry "Water plants" "inbox"))))
+
+(defun orgzly-data-test--file-string (book)
+  (with-temp-buffer
+    (insert-file-contents (orgzly-data-book-file book))
+    (buffer-string)))
+
+(ert-deftest orgzly-data-clocking ()
+  (orgzly-data-test--with-books
+   (let ((ref (orgzly-data-entry-ref (orgzly-data-test--entry "Loose thought"))))
+     ;; Clock in: an open CLOCK line in a fresh LOGBOOK drawer; a second
+     ;; clock-in while running is a no-op (Orgzly's semantics).
+     (orgzly-data-clock-in ref)
+     (orgzly-data-clock-in ref)
+     (let ((s (orgzly-data-test--file-string "inbox")))
+       (should (string-match-p ":LOGBOOK:" s))
+       (should (= 1 (cl-count-if
+                     (lambda (l) (string-match-p "^[ \t]*CLOCK:" l))
+                     (split-string s "\n")))))
+     ;; Clock out closes it with an end stamp and a duration.
+     (orgzly-data-clock-out ref)
+     (should (string-match-p "CLOCK: \\[[^]]+\\]--\\[[^]]+\\] =>  [0-9]+:[0-9][0-9]"
+                             (orgzly-data-test--file-string "inbox"))))
+   ;; Cancel removes a running clock, and an emptied drawer goes too.
+   (let ((ref (orgzly-data-entry-ref (orgzly-data-test--entry "Meeting"))))
+     (orgzly-data-clock-in ref)
+     (orgzly-data-clock-cancel ref)
+     (let ((s (orgzly-data-test--file-string "gtd")))
+       (should-not (string-match-p "CLOCK:" s))
+       (should-not (string-match-p ":LOGBOOK:" s))))))
 
 (ert-deftest orgzly-data-new-note-under-parent ()
   (orgzly-data-test--with-books

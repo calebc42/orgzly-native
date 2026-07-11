@@ -23,6 +23,16 @@
 Off matches Orgzly: sharing creates the note and gets out of the way."
   :type 'boolean :group 'orgzly)
 
+(defcustom orgzly-shared-text-placement 'title
+  "Where subject-less shared text goes (Orgzly: shared text placement).
+`title' makes the first line the note's title, the rest content;
+`content' keeps the whole text as content under an \"Untitled\" note —
+Orgzly's default is content with an empty heading, but an untitled
+heading serves the outline better here."
+  :type '(choice (const :tag "First line as title" title)
+                 (const :tag "All in content" content))
+  :group 'orgzly)
+
 (defun orgzly-capture--on-share (args _payload)
   "Create a note in the default book from a share sheet payload."
   (let* ((text (alist-get 'text args))
@@ -32,9 +42,14 @@ Off matches Orgzly: sharing creates the note and gets out of the way."
          (subject (and (stringp subject)
                        (not (string-empty-p (string-trim subject)))
                        (string-trim subject)))
-         ;; Title: the subject, else the shared text's first line.
-         (title (or subject (car (split-string (or text "Shared note") "\n"))))
-         (content (cond ((and subject text) text)
+         (in-content (and (not subject)
+                          (eq orgzly-shared-text-placement 'content)))
+         ;; Title: the subject, else the shared text's first line —
+         ;; unless the placement pref keeps the whole text as content.
+         (title (cond (subject subject)
+                      (in-content "Untitled")
+                      (t (car (split-string (or text "Shared note") "\n")))))
+         (content (cond ((or subject in-content) text)
                         ((and text (string-match-p "\n" text))
                          (mapconcat #'identity
                                     (cdr (split-string text "\n")) "\n"))))

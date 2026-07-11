@@ -58,6 +58,14 @@
   "When non-nil, new notes go to the top of the book instead of the end."
   :type 'boolean :group 'orgzly)
 
+(defcustom orgzly-new-note-add-id nil
+  "When non-nil, new notes get an :ID: property (Orgzly: populate ID)."
+  :type 'boolean :group 'orgzly)
+
+(defcustom orgzly-new-note-scheduled nil
+  "When non-nil, new notes are scheduled for today (Orgzly: set scheduled)."
+  :type 'boolean :group 'orgzly)
+
 ;; ─── Books ───────────────────────────────────────────────────────────────────
 
 (defun orgzly-data-book-file (book)
@@ -74,15 +82,17 @@
     (sort (directory-files orgzly-directory t "\\.org\\'" t) #'string-lessp)))
 
 (defun orgzly-data-books ()
-  "List of book alists: name, file, mtime, note count."
+  "List of book alists: name, file, title (#+TITLE, or nil), mtime, count."
   (mapcar (lambda (file)
-            `((name . ,(orgzly-data-book-name file))
-              (file . ,file)
-              (mtime . ,(float-time
-                         (file-attribute-modification-time
-                          (file-attributes file))))
-              (count . ,(length (orgzly-data-entries
-                                 (orgzly-data-book-name file))))))
+            (let ((name (orgzly-data-book-name file)))
+              `((name . ,name)
+                (file . ,file)
+                (title . ,(alist-get 'title
+                                     (orgzly-data-book-front-matter name)))
+                (mtime . ,(float-time
+                           (file-attribute-modification-time
+                            (file-attributes file))))
+                (count . ,(length (orgzly-data-entries name))))))
           (orgzly-data-book-files)))
 
 (defun orgzly-data-create-book (name)
@@ -282,6 +292,39 @@ An alist:
       `((title . ,title) (created . ,created) (filetags . ,filetags)
         (settings . ,(nreverse settings))
         (body . ,(unless (string-empty-p body) body))))))
+
+(defun orgzly-data-set-book-filetags (book tags)
+  "Set BOOK's #+FILETAGS: line to TAGS (empty removes the line).
+File tags feed every note's inherited tags, so `t.' searches see them."
+  (with-current-buffer (find-file-noselect (orgzly-data-book-file book))
+    (org-with-wide-buffer
+     (goto-char (point-min))
+     (let* ((limit (if (re-search-forward org-outline-regexp-bol nil t)
+                       (match-beginning 0)
+                     (point-max)))
+            (tags (cl-remove-if #'string-empty-p tags))
+            (line (and tags (format "#+FILETAGS: :%s:"
+                                    (string-join tags ":")))))
+       (goto-char (point-min))
+       (cond
+        ((re-search-forward "^[ \t]*#\\+\\(?:FILETAGS\\|filetags\\):.*$"
+                            limit t)
+         (if line
+             (replace-match line t t)
+           (delete-region (line-beginning-position)
+                          (min (point-max) (1+ (line-end-position))))))
+        (line
+         ;; New line goes after the last #+KEYWORD, or at the very top.
+         (let ((at (point-min)))
+           (while (re-search-forward "^[ \t]*#\\+[[:alnum:]_]+:" limit t)
+             (setq at (min limit (1+ (line-end-position)))))
+           (goto-char at)
+           (insert line "\n")))))
+     ;; The live buffer parsed its #+ keywords at open; re-read them so
+     ;; `org-file-tags' (and the scan's inherited tags) see the change.
+     (org-set-regexps-and-options))
+    (save-buffer)
+    (orgzly-data-invalidate)))
 
 ;; ─── The scan ────────────────────────────────────────────────────────────────
 
@@ -535,11 +578,11 @@ searching the file for it."
   (orgzly-data--with-ref ref
     (org-edit-headline title)))
 
-(defun orgzly-data--format-ts (parts)
-  "Canonical active timestamp assembled from the PARTS alist.
+(defun orgzly-data--format-ts (parts &optional inactive)
+  "Canonical timestamp assembled from the PARTS alist.
 PARTS holds strings under `date' (required, \"2026-07-20\"), `time'
 (\"14:00\"), `end' (\"15:30\", only with time), `repeater' (\"+1w\"),
-`warning' (\"-2d\")."
+`warning' (\"-2d\").  INACTIVE brackets it [so] instead of <so>."
   (let* ((date (alist-get 'date parts))
          (time (alist-get 'time parts))
          (end (alist-get 'end parts))
@@ -547,33 +590,43 @@ PARTS holds strings under `date' (required, \"2026-07-20\"), `time'
                            (string-to-number (substring date 8 10))
                            (string-to-number (substring date 5 7))
                            (string-to-number (substring date 0 4)))))
-    (concat "<" (format-time-string "%Y-%m-%d %a" day)
+    (concat (if inactive "[" "<") (format-time-string "%Y-%m-%d %a" day)
             (and time (concat " " time (and end (concat "-" end))))
             (when-let ((r (alist-get 'repeater parts))) (concat " " r))
             (when-let ((w (alist-get 'warning parts))) (concat " " w))
-            ">")))
+            (if inactive "]" ">"))))
 
 (defun orgzly-data-set-planning (ref kind parts)
-  "Set REF's planning KIND (`scheduled' or `deadline') from PARTS.
+  "Set REF's planning KIND (`scheduled', `deadline' or `closed') from PARTS.
 PARTS is nil to remove the entry, or an alist for
-`orgzly-data--format-ts'.  `org-schedule'/`org-deadline' manage the
-planning line's placement and removal, but they drop trailing
-repeater/warning cookies from their TIME argument (and would lose an
-end time passed alongside them) — so the stamp they insert is
-rewritten whole from PARTS."
+`orgzly-data--format-ts'.  org's planning functions manage the line's
+placement and removal, but they drop trailing repeater/warning cookies
+from their TIME argument (and would lose an end time passed alongside
+them) — so the stamp they insert is rewritten whole from PARTS."
   (orgzly-data--with-ref ref
-    (let ((fn (if (eq kind 'deadline) #'org-deadline #'org-schedule))
-          (date (alist-get 'date parts)))
+    (let ((date (alist-get 'date parts))
+          (closed (eq kind 'closed)))
       (if (null date)
-          (funcall fn '(4))
-        (funcall fn nil date)
+          (if closed
+              (org-add-planning-info nil nil 'closed)
+            (funcall (if (eq kind 'deadline) #'org-deadline #'org-schedule)
+                     '(4)))
+        (if closed
+            (org-add-planning-info 'closed (org-read-date nil t date))
+          (funcall (if (eq kind 'deadline) #'org-deadline #'org-schedule)
+                   nil date))
         (org-back-to-heading t)
         (let ((bound (line-end-position 2))
-              (re (concat (if (eq kind 'deadline)
-                              org-deadline-string org-scheduled-string)
-                          "[ \t]*\\(<[^>\n]+>\\)")))
+              (re (pcase kind
+                    ('closed (concat org-closed-string
+                                     "[ \t]*\\(\\[[^]\n]+\\]\\)"))
+                    ('deadline (concat org-deadline-string
+                                       "[ \t]*\\(<[^>\n]+>\\)"))
+                    (_ (concat org-scheduled-string
+                               "[ \t]*\\(<[^>\n]+>\\)")))))
           (when (re-search-forward re bound t)
-            (replace-match (orgzly-data--format-ts parts) t t nil 1)))))))
+            (replace-match (orgzly-data--format-ts parts closed)
+                           t t nil 1)))))))
 
 (defun orgzly-data-set-content (ref content)
   "Replace REF's content (text between metadata and next heading)."
@@ -711,6 +764,62 @@ paste restores all of them (Orgzly's batch cut)."
   (orgzly-data--with-ref ref
     (org-archive-subtree)))
 
+;; ─── Clocking ────────────────────────────────────────────────────────────────
+;;
+;; Orgzly's clocking is per note — an open CLOCK: line in the LOGBOOK
+;; drawer, no global single-clock — so these edit the drawer directly
+;; rather than driving `org-clock-in' (which manages one active clock,
+;; mode-line state, and auto-clock-out).
+
+(defun orgzly-data--open-clock-pos ()
+  "Position of the entry's running CLOCK line at bol, or nil.
+Point must be within the entry."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((end (org-entry-end-position)))
+      (when (re-search-forward "^[ \t]*CLOCK: \\[[^]\n]+\\][ \t]*$" end t)
+        (match-beginning 0)))))
+
+(defun orgzly-data-clock-in (ref)
+  "Start a clock on REF: an open CLOCK: line atop its LOGBOOK drawer.
+No-op while one is already running there (Orgzly's clockIn)."
+  (orgzly-data--with-ref ref
+    (unless (orgzly-data--open-clock-pos)
+      (let ((org-log-into-drawer "LOGBOOK"))
+        (goto-char (org-log-beginning t))
+        (insert (format-time-string "CLOCK: [%Y-%m-%d %a %H:%M]\n"))))))
+
+(defun orgzly-data-clock-out (ref)
+  "Close REF's running clock, appending the end time and duration."
+  (orgzly-data--with-ref ref
+    (when-let ((pos (orgzly-data--open-clock-pos)))
+      (goto-char pos)
+      (re-search-forward org-ts-regexp-inactive (line-end-position))
+      (let* ((start (org-time-string-to-time (match-string 0)))
+             (now (current-time))
+             (mins (max 0 (floor (float-time (time-subtract now start)) 60))))
+        (end-of-line)
+        (delete-horizontal-space)
+        (insert (format-time-string "--[%Y-%m-%d %a %H:%M]" now)
+                (format " =>  %d:%02d" (/ mins 60) (% mins 60)))))))
+
+(defun orgzly-data-clock-cancel (ref)
+  "Remove REF's running clock line; drop the drawer if it ends up empty."
+  (orgzly-data--with-ref ref
+    (when-let ((pos (orgzly-data--open-clock-pos)))
+      (goto-char pos)
+      (delete-region (line-beginning-position)
+                     (min (point-max) (1+ (line-end-position))))
+      ;; An emptied LOGBOOK is deleted, like org would.
+      (forward-line -1)
+      (when (and (looking-at-p "^[ \t]*:LOGBOOK:[ \t]*$")
+                 (save-excursion
+                   (forward-line 1)
+                   (looking-at-p "^[ \t]*:END:[ \t]*$")))
+        (delete-region (line-beginning-position)
+                       (min (point-max)
+                            (save-excursion (forward-line 2) (point))))))))
+
 (defun orgzly-data-promote (ref)
   "Promote REF's subtree one level."
   (orgzly-data--with-ref ref (org-promote-subtree)))
@@ -751,7 +860,10 @@ Otherwise the note is a top-level heading appended to the book (or
 prepended, per `orgzly-new-note-prepend').  Defaults honour the Orzgly
 new-note settings (`orgzly-new-note-state', created-at property)."
   (let ((file (orgzly-data-book-file book))
-        (state (or state orgzly-new-note-state)))
+        (state (or state orgzly-new-note-state))
+        (scheduled (or scheduled
+                       (and orgzly-new-note-scheduled
+                            (format-time-string "%Y-%m-%d")))))
     (unless (file-exists-p file) (orgzly-data-create-book book))
     (with-current-buffer (find-file-noselect file)
       (org-with-wide-buffer
@@ -793,6 +905,9 @@ new-note settings (`orgzly-new-note-state', created-at property)."
            (when orgzly-new-note-created-property
              (org-set-property orgzly-created-property
                                (format-time-string "[%Y-%m-%d %a %H:%M]")))
+           (when orgzly-new-note-add-id
+             (require 'org-id)
+             (org-set-property "ID" (org-id-uuid)))
            (when (and content (not (string-empty-p (string-trim content))))
              (org-end-of-subtree t t)
              (insert (string-trim-right content) "\n"))

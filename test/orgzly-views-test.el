@@ -203,8 +203,10 @@ and multi-select mode renders (and lints) on both query views."
        (should-not (cl-some (lambda (s) (alist-get 'strike s)) spans)))
      (let ((spans (orgzly-views-test--spans
                    (orgzly-ui--title-node shipped))))
-       ;; Done state: Orgzly green; the title fades to the muted color.
-       (should (equal (alist-get 'color (nth 0 spans)) orgzly-ui--done-color))
+       ;; Done state: the whole row fades (upstream's 45% alpha), so
+       ;; the keyword wears the faded green and the title the muted.
+       (should (equal (alist-get 'color (nth 0 spans))
+                      orgzly-ui--done-faded-color))
        (should (equal (alist-get 'color (nth 1 spans))
                       orgzly-ui--muted-color))))))
 
@@ -239,14 +241,24 @@ and multi-select mode renders (and lints) on both query views."
 ;; ─── Dialog specs ────────────────────────────────────────────────────────────
 
 (ert-deftest orgzly-views-lint-dialogs ()
-  "The quick popup, timestamp and tags dialogs produce wire-valid specs."
+  "The quick popup, timestamp, tags and filetags dialogs lint clean."
   (orgzly-views-test--with-app
    (let ((ref (orgzly-data-entry-ref (car (orgzly-data-entries "gtd")))))
      (dolist (spec (list (orgzly-ui--quick-dialog ref)
                          (orgzly-ui--plan-dialog ref "scheduled")
                          (orgzly-ui--plan-dialog ref "deadline")
-                         (orgzly-ui--tags-dialog ref '("family"))))
+                         (orgzly-ui--plan-dialog ref "closed")
+                         (orgzly-ui--tags-dialog ref '("family"))
+                         (orgzly-ui--filetags-dialog "gtd" '("work"))))
        (should (equal (mapcar #'cdr (jetpacs-lint-spec spec)) nil))))))
+
+(ert-deftest orgzly-views-book-card-title ()
+  "A #+TITLE'd book shows the title with the filename as subtitle."
+  (orgzly-views-test--with-app
+   (let ((strings (orgzly-views-test--strings
+                   (orgzly-views-test--build-and-lint "orgzly.books"))))
+     (should (member "Inbox" strings))
+     (should (member "inbox" strings)))))
 
 ;; ─── Drawer ──────────────────────────────────────────────────────────────────
 

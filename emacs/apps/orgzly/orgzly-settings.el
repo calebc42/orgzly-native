@@ -37,7 +37,10 @@
    '((orgzly-new-note-state . (:label "Initial state"))
      (orgzly-new-note-prepend . (:label "Add to top of notebook"))
      (orgzly-new-note-created-property . (:label "Stamp created time"))
-     (orgzly-created-property . (:label "Created property name"))))
+     (orgzly-created-property . (:label "Created property name"))
+     (orgzly-new-note-add-id . (:label "Add ID property"))
+     (orgzly-new-note-scheduled . (:label "Schedule for today"))
+     (orgzly-shared-text-placement . (:label "Shared text placement"))))
 
   (jetpacs-settings-register-section
    "Display"
@@ -64,6 +67,7 @@
    "Org file format"
    '((org-archive-location . (:label "Archive location"))
      (org-log-done . (:label "Log state changes"))
+     (org-log-repeat . (:label "Log repeater shifts (LAST_REPEAT)"))
      (org-priority-default . (:label "Default priority (char code)"))
      (org-priority-highest . (:label "Highest priority (char code)"))
      (org-priority-lowest . (:label "Lowest priority (char code)")))))

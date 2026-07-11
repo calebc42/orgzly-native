@@ -52,7 +52,7 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
   the bundle opens with `(require 'jetpacs-core)`)
 - `deploy.sh` / `deploy.ps1` — rebuild the bundle and push it to a
   connected device over adb (see Getting started).
-- `test/` — 74 ERT tests, including a jetpacs-lint pass over every view.
+- `test/` — 78 ERT tests, including a jetpacs-lint pass over every view.
 - `docs/PARITY.md` — the feature matrix and deliberate divergences.
 
 ## Getting started
