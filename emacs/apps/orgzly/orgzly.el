@@ -56,7 +56,11 @@
       (setq jetpacs-shell-drawer-items
             (cl-remove-if (lambda (e) (and (>= (car e) 30) (< (car e) 50)))
                           jetpacs-shell-drawer-items))
-      (let ((order 30.0))
+      ;; Registered under the app's owner id — this sync runs from a
+      ;; push hook, outside any load-time owner scope, and the entries
+      ;; must ride only Orgzly's drawer once a second app exists.
+      (with-jetpacs-owner "orgzly"
+       (let ((order 30.0))
         (jetpacs-shell-add-drawer-item
          order (lambda ()
                  (jetpacs-drawer-item "manage_search" "Searches"
@@ -77,7 +81,7 @@
         (jetpacs-shell-add-drawer-item
          order (lambda ()
                  (jetpacs-drawer-item "library_books" "Notebooks"
-                                   (jetpacs-shell-switch-view "books"))))
+                                   (jetpacs-shell-switch-view "orgzly.books"))))
         (dolist (name (nth 1 key))
           (setq order (+ order 0.01))
           (jetpacs-shell-add-drawer-item
@@ -87,15 +91,19 @@
               "description" name
               (jetpacs-action "orgzly.book.open"
                            :args `((book . ,name)) :when-offline "drop")
-              :selected (equal name orgzly-ui--current-book)))))))))
+              :selected (equal name orgzly-ui--current-book))))))))))
 
 (add-hook 'jetpacs-shell-after-push-hook #'orgzly--drawer-sync)
 (orgzly--drawer-sync)
 
+;; Every view name carries the "orgzly." namespace so a coexisting app
+;; (glasspane's "glasspane.agenda", say) can never replace one of these
+;; in the registry.  Settings is absent by design: Orgzly's sections
+;; ride the stock core settings screen.
 (jetpacs-defapp "orgzly"
   :label "Orgzly" :icon "book"
-  :views '("books" "agenda" "search"
-           "book" "note" "preface" "searches" "settings")
+  :views '("orgzly.books" "orgzly.agenda" "orgzly.search" "orgzly.book"
+           "orgzly.note" "orgzly.preface" "orgzly.searches")
   :order 10)
 
 (provide 'orgzly)

@@ -3,16 +3,17 @@
 ;; Copyright (C) 2026 calebc42 and contributors
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; The Orgzly screens, as jetpacs shell views:
-;;   "books"   tab      — the notebooks list (create/rename/delete/preface)
-;;   "book"    overlay  — one book as a flat foldable outline in Orgzly's
-;;                        item_head idiom: colored state keywords, icon-led
-;;                        planning lines, inline content, swipe/long-press
-;;                        quick-action popup, batch selection
-;;   "note"    overlay  — the note editor: breadcrumbs, inline title,
-;;                        icon-led metadata rows with clear buttons, the
-;;                        timestamp dialog, tags, properties, content
-;;   "preface" overlay  — the book preface editor
+;; The Orgzly screens, as jetpacs shell views (namespaced "orgzly.*" per
+;; the multi-app contract in jetpacs-apps.el):
+;;   "orgzly.books"   tab      — the notebooks list (create/rename/delete/preface)
+;;   "orgzly.book"    overlay  — one book as a flat foldable outline in Orgzly's
+;;                               item_head idiom: colored state keywords, icon-led
+;;                               planning lines, inline content, swipe/long-press
+;;                               quick-action popup, batch selection
+;;   "orgzly.note"    overlay  — the note editor: breadcrumbs, inline title,
+;;                               icon-led metadata rows with clear buttons, the
+;;                               timestamp dialog, tags, properties, content
+;;   "orgzly.preface" overlay  — the book preface editor
 ;;
 ;; All mutations funnel through orgzly-data.el (which invalidates the scan
 ;; memo); every handler ends in a `jetpacs-shell-push'.  Prompts inside
@@ -490,9 +491,9 @@ fold on-device, and swipe or long-press opens the quick-action popup."
        (format "%d selected" (length orgzly-ui--selection))
      (or orgzly-ui--current-book "Book"))
    (orgzly-ui--book-body)
-   :back-to "books"
+   :back-to "orgzly.books"
    :actions (list
-             (jetpacs-icon-button "search" (jetpacs-shell-switch-view "search")
+             (jetpacs-icon-button "search" (jetpacs-shell-switch-view "orgzly.search")
                                :content-description "Search")
              (jetpacs-icon-button (if orgzly-ui--select-mode "close" "checklist")
                                (jetpacs-action "orgzly.book.select-mode"
@@ -698,7 +699,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
     (jetpacs-shell-nav-view
      "Note"
      (orgzly-ui--note-body)
-     :back-to (if orgzly-ui--current-book "book" "books")
+     :back-to (if orgzly-ui--current-book "orgzly.book" "orgzly.books")
      :actions (when ref
                 (list (orgzly-ui--note-menu
                        (or (orgzly-ui--entry-for-ref ref) ref))))
@@ -805,14 +806,14 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
                   :on-save (jetpacs-action "orgzly.book.set-preface"
                                         :args `((book . ,book)))
                   :syntax "org" :toolbar "org")
-     :back-to "book"
+     :back-to "orgzly.book"
      :snackbar snackbar)))
 
 ;; ─── View registrations ──────────────────────────────────────────────────────
 
-(jetpacs-shell-define-view "books"
+(jetpacs-shell-define-view "orgzly.books"
   :builder (lambda (snackbar)
-             (jetpacs-shell-tab-view "books" (orgzly-ui--books-body)
+             (jetpacs-shell-tab-view "orgzly.books" (orgzly-ui--books-body)
                                   :snackbar snackbar
                                   :fab (jetpacs-fab "create_new_folder"
                                                  :on-tap (jetpacs-action
@@ -820,17 +821,17 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
   :tab '(:icon "library_books" :label "Books")
   :order 10)
 
-(jetpacs-shell-define-view "note"
+(jetpacs-shell-define-view "orgzly.note"
   :builder #'orgzly-ui--note-view
   :overlay (lambda () orgzly-ui--note-ref)
   :order 21)
 
-(jetpacs-shell-define-view "preface"
+(jetpacs-shell-define-view "orgzly.preface"
   :builder #'orgzly-ui--preface-view
   :overlay (lambda () orgzly-ui--preface-book)
   :order 22)
 
-(jetpacs-shell-define-view "book"
+(jetpacs-shell-define-view "orgzly.book"
   :builder #'orgzly-ui--book-view
   :overlay (lambda () orgzly-ui--current-book)
   :order 23)
@@ -842,7 +843,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
     (setq orgzly-ui--current-book (alist-get 'book args)
           orgzly-ui--note-ref nil
           orgzly-ui--preface-book nil)
-    (jetpacs-shell-push nil :switch-to "book")))
+    (jetpacs-shell-push nil :switch-to "orgzly.book")))
 
 (jetpacs-defaction "orgzly.book.new"
   (lambda (_ _)
@@ -889,7 +890,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
 (jetpacs-defaction "orgzly.book.preface"
   (lambda (args _)
     (setq orgzly-ui--preface-book (alist-get 'book args))
-    (jetpacs-shell-push nil :switch-to "preface")))
+    (jetpacs-shell-push nil :switch-to "orgzly.preface")))
 
 (jetpacs-defaction "orgzly.book.set-preface"
   (lambda (args _)
@@ -911,7 +912,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
       (orgzly-data-invalidate)
       (setq orgzly-ui--preface-book nil)
       (jetpacs-shell-notify "Preface saved")
-      (jetpacs-shell-push nil :switch-to (if orgzly-ui--current-book "book" "books")))))
+      (jetpacs-shell-push nil :switch-to (if orgzly-ui--current-book "orgzly.book" "orgzly.books")))))
 
 ;; ─── Actions: single note ────────────────────────────────────────────────────
 
@@ -928,7 +929,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
       (unless orgzly-ui--current-book
         (setq orgzly-ui--current-book
               (orgzly-data-book-name (alist-get 'file ref))))
-      (jetpacs-shell-push nil :switch-to "note"))))
+      (jetpacs-shell-push nil :switch-to "orgzly.note"))))
 
 (jetpacs-defaction "orgzly.note.new"
   (lambda (args _)
@@ -940,7 +941,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
           (setq orgzly-ui--current-book book
                 orgzly-ui--note-ref ref)
           (jetpacs-shell-notify "Note created")
-          (jetpacs-shell-push nil :switch-to "note"))))))
+          (jetpacs-shell-push nil :switch-to "orgzly.note"))))))
 
 (jetpacs-defaction "orgzly.note.new-under"
   (lambda (args _)
@@ -951,7 +952,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
         (let ((ref (orgzly-data-new-note book title :under parent)))
           (setq orgzly-ui--note-ref ref)
           (jetpacs-shell-notify "Note created")
-          (jetpacs-shell-push nil :switch-to "note"))))))
+          (jetpacs-shell-push nil :switch-to "orgzly.note"))))))
 
 (jetpacs-defaction "orgzly.note.rename"
   ;; From the editor's inline title field (args carry `value') or a
@@ -1098,7 +1099,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
           (setq orgzly-ui--note-ref nil))
         (jetpacs-shell-notify "Deleted")
         (jetpacs-shell-push nil :switch-to (if orgzly-ui--current-book
-                                            "book" "books"))))))
+                                            "orgzly.book" "orgzly.books"))))))
 
 (jetpacs-defaction "orgzly.note.refile"
   (lambda (args _)
@@ -1109,7 +1110,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
       (setq orgzly-ui--note-ref nil)
       (jetpacs-shell-notify (format "Refiled to %s" target))
       (jetpacs-shell-push nil :switch-to (if orgzly-ui--current-book
-                                          "book" "books")))))
+                                          "orgzly.book" "orgzly.books")))))
 
 (jetpacs-defaction "orgzly.note.archive"
   (lambda (args _)
@@ -1117,7 +1118,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
     (setq orgzly-ui--note-ref nil)
     (jetpacs-shell-notify "Archived")
     (jetpacs-shell-push nil :switch-to (if orgzly-ui--current-book
-                                        "book" "books"))))
+                                        "orgzly.book" "orgzly.books"))))
 
 (jetpacs-defaction "orgzly.note.cut"
   (lambda (args _)

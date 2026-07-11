@@ -44,17 +44,19 @@ Off matches Orgzly: sharing creates the note and gets out of the way."
     (if orgzly-share-open-note
         (progn (setq orgzly-ui--note-ref ref
                      orgzly-ui--current-book orgzly-default-book)
-               (jetpacs-shell-push nil :switch-to "note"))
+               (jetpacs-shell-push nil :switch-to "orgzly.note"))
       (jetpacs-shell-push))))
 
 (jetpacs-defaction "share.text" #'orgzly-capture--on-share)
 
-;; The drawer's quick capture into the default notebook.
-(jetpacs-shell-add-drawer-item
- 20 (lambda ()
-      (jetpacs-drawer-item "add" "New note"
-                        (jetpacs-action "orgzly.note.new"
-                                     :args `((book . ,orgzly-default-book))))))
+;; The drawer's quick capture into the default notebook — owned, so it
+;; rides only Orgzly's drawer once a second app exists.
+(with-jetpacs-owner "orgzly"
+  (jetpacs-shell-add-drawer-item
+   20 (lambda ()
+        (jetpacs-drawer-item "add" "New note"
+                          (jetpacs-action "orgzly.note.new"
+                                       :args `((book . ,orgzly-default-book)))))))
 
 (provide 'orgzly-capture)
 ;;; orgzly-capture.el ends here

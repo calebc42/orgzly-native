@@ -155,19 +155,19 @@
 
 (defun orgzly-search--manage-view (snackbar)
   (jetpacs-shell-nav-view "Searches" (orgzly-search--manage-body)
-                       :back-to "search"
+                       :back-to "orgzly.search"
                        :snackbar snackbar))
 
 ;; ─── Views & actions ─────────────────────────────────────────────────────────
 
-(jetpacs-shell-define-view "search"
+(jetpacs-shell-define-view "orgzly.search"
   :builder (lambda (snackbar)
-             (jetpacs-shell-tab-view "search" (orgzly-search--body)
+             (jetpacs-shell-tab-view "orgzly.search" (orgzly-search--body)
                                   :snackbar snackbar))
   :tab '(:icon "search" :label "Search")
   :order 12)
 
-(jetpacs-shell-define-view "searches"
+(jetpacs-shell-define-view "orgzly.searches"
   :builder #'orgzly-search--manage-view
   :overlay (lambda () orgzly-search--manage)
   :order 24)
@@ -178,19 +178,19 @@
 (jetpacs-defaction "orgzly.search.run"
   (lambda (args _)
     (setq orgzly-search--query (or (alist-get 'value args) ""))
-    (jetpacs-shell-push "search")))
+    (jetpacs-shell-push "orgzly.search")))
 
 (jetpacs-defaction "orgzly.search.saved"
   (lambda (args _)
     (when-let ((ss (assoc (alist-get 'name args) orgzly-saved-searches)))
       (setq orgzly-search--query (cdr ss)
             orgzly-search--manage nil)
-      (jetpacs-shell-push "search" :switch-to "search"))))
+      (jetpacs-shell-push "orgzly.search" :switch-to "orgzly.search"))))
 
 (jetpacs-defaction "orgzly.search.manage"
   (lambda (_ _)
     (setq orgzly-search--manage t)
-    (jetpacs-shell-push nil :switch-to "searches")))
+    (jetpacs-shell-push nil :switch-to "orgzly.searches")))
 
 (jetpacs-defaction "orgzly.search.add"
   (lambda (_ _)

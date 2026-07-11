@@ -246,9 +246,9 @@ an overdue item carries how late it is in red."
                 (list (jetpacs-empty-state :icon "event_available"
                                         :title "Nothing scheduled")))))))
 
-(jetpacs-shell-define-view "agenda"
+(jetpacs-shell-define-view "orgzly.agenda"
   :builder (lambda (snackbar)
-             (jetpacs-shell-tab-view "agenda" (orgzly-agenda--body)
+             (jetpacs-shell-tab-view "orgzly.agenda" (orgzly-agenda--body)
                                   :snackbar snackbar))
   :tab '(:icon "event" :label "Agenda")
   :order 11)

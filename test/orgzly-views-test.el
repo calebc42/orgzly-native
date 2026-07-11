@@ -61,36 +61,38 @@ Bring the slides
 
 (ert-deftest orgzly-views-lint-tabs ()
   (orgzly-views-test--with-app
-   (dolist (view '("books" "agenda" "search" "settings"))
+   ;; "settings" is the stock core view — Orgzly's sections render
+   ;; through it rather than an app-defined screen.
+   (dolist (view '("orgzly.books" "orgzly.agenda" "orgzly.search" "settings"))
      (orgzly-views-test--build-and-lint view))))
 
 (ert-deftest orgzly-views-lint-book-view ()
   (orgzly-views-test--with-app
    (setq orgzly-ui--current-book "gtd")
-   (orgzly-views-test--build-and-lint "book")
+   (orgzly-views-test--build-and-lint "orgzly.book")
    ;; And in multi-select mode with a selection.
    (setq orgzly-ui--select-mode t
          orgzly-ui--selection
          (list (orgzly-data-entry-ref (car (orgzly-data-entries "gtd")))))
-   (orgzly-views-test--build-and-lint "book")
+   (orgzly-views-test--build-and-lint "orgzly.book")
    (orgzly-ui--reset-drill-in)))
 
 (ert-deftest orgzly-views-lint-note-view ()
   (orgzly-views-test--with-app
    (dolist (entry (orgzly-data-entries))
      (setq orgzly-ui--note-ref (orgzly-data-entry-ref entry))
-     (orgzly-views-test--build-and-lint "note"))
+     (orgzly-views-test--build-and-lint "orgzly.note"))
    ;; A dangling ref renders the not-found state, never an error.
    (setq orgzly-ui--note-ref '((file . "/nope.org") (pos . 1) (title . "x")))
-   (orgzly-views-test--build-and-lint "note")
+   (orgzly-views-test--build-and-lint "orgzly.note")
    (orgzly-ui--reset-drill-in)))
 
 (ert-deftest orgzly-views-lint-preface-and-searches ()
   (orgzly-views-test--with-app
    (setq orgzly-ui--preface-book "inbox")
-   (orgzly-views-test--build-and-lint "preface")
+   (orgzly-views-test--build-and-lint "orgzly.preface")
    (setq orgzly-search--manage t)
-   (orgzly-views-test--build-and-lint "searches")
+   (orgzly-views-test--build-and-lint "orgzly.searches")
    (orgzly-ui--reset-drill-in)))
 
 (ert-deftest orgzly-views-lint-search-results ()
@@ -98,7 +100,7 @@ Bring the slides
    ;; Flat query, agenda query, and a query error all render.
    (dolist (q '("i.todo" ".it.done ad.7" "call"))
      (setq orgzly-search--query q)
-     (orgzly-views-test--build-and-lint "search"))
+     (orgzly-views-test--build-and-lint "orgzly.search"))
    (setq orgzly-search--query "")))
 
 (ert-deftest orgzly-views-widget-and-reminders-specs ()
@@ -188,7 +190,7 @@ Bring the slides
    (let* ((band (cl-remove-if-not
                  (lambda (e) (and (>= (car e) 30) (< (car e) 50)))
                  jetpacs-shell-drawer-items))
-          (items (mapcar (lambda (e) (funcall (cdr e))) band))
+          (items (mapcar (lambda (e) (funcall (cadr e))) band))
           (labels (mapcar (lambda (i) (alist-get 'label i)) items)))
      (should (member "Searches" labels))
      (should (member "Notebooks" labels))
