@@ -15,6 +15,7 @@
 (require 'jetpacs-settings)
 (require 'jetpacs-widgets)
 (require 'orgzly-data)
+(require 'orgzly-ui)
 (require 'orgzly-reminders)
 (require 'orgzly-agenda)
 
@@ -36,8 +37,18 @@
    (orgzly-created-property . (:label "Created property name"))))
 
 (jetpacs-settings-register-section
+ "Display"
+ '((orgzly-display-content . (:label "Note content in lists"))
+   (orgzly-display-content-line-count . (:label "Content line count"))
+   (orgzly-display-planning . (:label "Planning times"))
+   (orgzly-display-book-name-in-search . (:label "Notebook name in results"))
+   (orgzly-content-preview-lines . (:label "Content preview lines"))))
+
+(jetpacs-settings-register-section
  "Agenda"
- '((orgzly-agenda-hide-empty-days . (:label "Hide empty days"))))
+ '((orgzly-agenda-hide-empty-days . (:label "Hide empty days"))
+   (orgzly-agenda-group-scheduled-with-today
+    . (:label "Group overdue scheduled with today"))))
 
 (jetpacs-settings-register-section
  "Reminders"

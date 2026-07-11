@@ -53,16 +53,17 @@
      :on-button (and todo (jetpacs-action "orgzly.note.toggle-done" :args ref)))))
 
 (defun orgzly-widget--agenda-rows (query ctx)
-  "Day-grouped widget rows for an ad.N QUERY, with divider rows."
+  "Sectioned widget rows for an ad.N QUERY: Overdue, then day dividers."
   (let ((now (current-time))
         (rows nil) (count 0))
     (cl-loop
-     for (day . items) in (orgzly-agenda-day-groups
+     for (day . items) in (orgzly-agenda-sections
                            (orgzly-data-entries) query ctx now)
      while (< count orgzly-widget--cap)
      when items
      do (let* ((today (orgzly-agenda--day-start 0 now))
-               (label (cond ((= day today) "Today")
+               (label (cond ((eq day 'overdue) "Overdue")
+                            ((= day today) "Today")
                             ((= day (orgzly-agenda--day-start 1 now)) "Tomorrow")
                             (t (format-time-string "%a, %b %-d"
                                                    (seconds-to-time day))))))

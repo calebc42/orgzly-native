@@ -33,6 +33,65 @@
 
 (setq jetpacs-shell-drawer-header "Orgzly")
 
+;; ─── The drawer: searches and notebooks, like Orgzly's navigation ────────────
+;;
+;; Orgzly's drawer lists every saved search and every notebook for
+;; one-tap jumps.  Drawer builders run per push (so selection highlights
+;; stay current), but the *set* of items only changes when a search or
+;; book is added, renamed, or removed — the sync below runs after each
+;; push and is memo-guarded on the name lists, so a stable set costs
+;; nothing and never re-pushes.
+
+(defvar orgzly--drawer-memo nil
+  "The (SEARCH-NAMES BOOK-NAMES) the drawer was last built for.")
+
+(defun orgzly--drawer-sync ()
+  "Mirror saved searches and notebooks into the drawer."
+  (let ((key (list (mapcar #'car (orgzly-search-saved-searches))
+                   (mapcar #'orgzly-data-book-name
+                           (orgzly-data-book-files)))))
+    (unless (equal key orgzly--drawer-memo)
+      (setq orgzly--drawer-memo key)
+      ;; Orders 30–49 are the drawer band owned by this sync.
+      (setq jetpacs-shell-drawer-items
+            (cl-remove-if (lambda (e) (and (>= (car e) 30) (< (car e) 50)))
+                          jetpacs-shell-drawer-items))
+      (let ((order 30.0))
+        (jetpacs-shell-add-drawer-item
+         order (lambda ()
+                 (jetpacs-drawer-item "manage_search" "Searches"
+                                   (jetpacs-action "orgzly.search.manage"
+                                                :when-offline "drop"))))
+        (dolist (name (nth 0 key))
+          (setq order (+ order 0.01))
+          (jetpacs-shell-add-drawer-item
+           order
+           (lambda ()
+             (jetpacs-drawer-item
+              "search" name
+              (jetpacs-action "orgzly.search.saved"
+                           :args `((name . ,name)) :when-offline "drop")
+              :selected (equal (cdr (assoc name (orgzly-search-saved-searches)))
+                               orgzly-search--query)))))
+        (setq order 40.0)
+        (jetpacs-shell-add-drawer-item
+         order (lambda ()
+                 (jetpacs-drawer-item "library_books" "Notebooks"
+                                   (jetpacs-shell-switch-view "books"))))
+        (dolist (name (nth 1 key))
+          (setq order (+ order 0.01))
+          (jetpacs-shell-add-drawer-item
+           order
+           (lambda ()
+             (jetpacs-drawer-item
+              "description" name
+              (jetpacs-action "orgzly.book.open"
+                           :args `((book . ,name)) :when-offline "drop")
+              :selected (equal name orgzly-ui--current-book)))))))))
+
+(add-hook 'jetpacs-shell-after-push-hook #'orgzly--drawer-sync)
+(orgzly--drawer-sync)
+
 (jetpacs-defapp "orgzly"
   :label "Orgzly" :icon "book"
   :views '("books" "agenda" "search"

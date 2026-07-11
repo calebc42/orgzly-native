@@ -119,5 +119,83 @@ Bring the slides
   (orgzly-views-test--with-app
    (should (assoc "orgzly" (bound-and-true-p jetpacs-apps--registry)))))
 
+;; ─── Orgzly row semantics ────────────────────────────────────────────────────
+
+(defun orgzly-views-test--spans (node)
+  "The span alists of a rich-text NODE, as a list."
+  (append (alist-get 'spans node) nil))
+
+(ert-deftest orgzly-views-title-follows-orgzly ()
+  "STATE  #A  Title  tags — red open state, green done, no colons, no strike."
+  (orgzly-views-test--with-app
+   (let* ((entries (orgzly-data-entries "gtd"))
+          (call-mom (car entries))
+          (shipped (cl-find "Ship report" entries
+                            :key (lambda (e) (alist-get 'title e))
+                            :test #'equal)))
+     (let ((spans (orgzly-views-test--spans
+                   (orgzly-ui--title-node call-mom))))
+       ;; State: bold, Orgzly red for open keywords.
+       (should (equal (alist-get 'text (nth 0 spans)) "TODO  "))
+       (should (equal (alist-get 'color (nth 0 spans)) orgzly-ui--todo-color))
+       (should (alist-get 'bold (nth 0 spans)))
+       ;; Priority as "#A", not "[#A]", and never red.
+       (should (equal (alist-get 'text (nth 1 spans)) "#A  "))
+       ;; Tags space-separated, no colons, muted.
+       (let ((tag-span (car (last spans))))
+         (should (equal (alist-get 'text tag-span) "  family phone"))
+         (should (equal (alist-get 'color tag-span) orgzly-ui--muted-color)))
+       ;; No strikethrough anywhere (Orgzly fades, never strikes).
+       (should-not (cl-some (lambda (s) (alist-get 'strike s)) spans)))
+     (let ((spans (orgzly-views-test--spans
+                   (orgzly-ui--title-node shipped))))
+       ;; Done state: Orgzly green; the title fades to the muted color.
+       (should (equal (alist-get 'color (nth 0 spans)) orgzly-ui--done-color))
+       (should (equal (alist-get 'color (nth 1 spans))
+                      orgzly-ui--muted-color))))))
+
+(ert-deftest orgzly-views-title-line-count ()
+  "The content line count shows only when content is hidden and the pref is on."
+  (orgzly-views-test--with-app
+   (let ((entry (car (orgzly-data-entries "gtd")))
+         (orgzly-display-content-line-count t))
+     (let ((spans (orgzly-views-test--spans
+                   (orgzly-ui--title-node entry :hide-content t))))
+       (should (equal (alist-get 'text (car (last spans))) "  1")))
+     (let ((spans (orgzly-views-test--spans
+                   (orgzly-ui--title-node entry))))
+       (should-not (equal (alist-get 'text (car (last spans))) "  1"))))))
+
+;; ─── Dialog specs ────────────────────────────────────────────────────────────
+
+(ert-deftest orgzly-views-lint-dialogs ()
+  "The quick popup, timestamp and tags dialogs produce wire-valid specs."
+  (orgzly-views-test--with-app
+   (let ((ref (orgzly-data-entry-ref (car (orgzly-data-entries "gtd")))))
+     (dolist (spec (list (orgzly-ui--quick-dialog ref)
+                         (orgzly-ui--plan-dialog ref "scheduled")
+                         (orgzly-ui--plan-dialog ref "deadline")
+                         (orgzly-ui--tags-dialog ref '("family"))))
+       (should (equal (mapcar #'cdr (jetpacs-lint-spec spec)) nil))))))
+
+;; ─── Drawer ──────────────────────────────────────────────────────────────────
+
+(ert-deftest orgzly-views-drawer-lists-searches-and-books ()
+  "The drawer band mirrors saved searches and notebooks, Orgzly-style."
+  (orgzly-views-test--with-app
+   (setq orgzly--drawer-memo nil)
+   (orgzly--drawer-sync)
+   (let* ((band (cl-remove-if-not
+                 (lambda (e) (and (>= (car e) 30) (< (car e) 50)))
+                 jetpacs-shell-drawer-items))
+          (items (mapcar (lambda (e) (funcall (cdr e))) band))
+          (labels (mapcar (lambda (i) (alist-get 'label i)) items)))
+     (should (member "Searches" labels))
+     (should (member "Notebooks" labels))
+     (should (member "gtd" labels))
+     (should (member "inbox" labels))
+     (dolist (ss orgzly-saved-searches)
+       (should (member (car ss) labels))))))
+
 (provide 'orgzly-views-test)
 ;;; orgzly-views-test.el ends here

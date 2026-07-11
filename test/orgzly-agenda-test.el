@@ -91,6 +91,38 @@
     ;; The overdue item is qualified with how many days late it is.
     (should (= (alist-get 'overdue-days (car (cdr (nth 0 groups)))) 8))))
 
+(ert-deftest orgzly-agenda-sections-overdue-first ()
+  "Overdue occurrences sit in a leading Overdue section, Orgzly-style —
+unless grouping overdue scheduled notes with today is on."
+  (let* ((entries (list (orgzly-agenda-test--entry
+                         :title "late" :state "TODO"
+                         :scheduled (orgzly-agenda-test--ts 2026 7 1))
+                        (orgzly-agenda-test--entry
+                         :title "today" :pos 2 :state "TODO"
+                         :scheduled (orgzly-agenda-test--ts 2026 7 9 9 0))))
+         (query (orgzly-query-parse ".it.done ad.7"))
+         (titles (lambda (items)
+                   (mapcar (lambda (it)
+                             (alist-get 'title (alist-get 'entry it)))
+                           items))))
+    (let* ((orgzly-agenda-group-scheduled-with-today nil)
+           (sections (orgzly-agenda-sections entries query
+                                             (orgzly-agenda-test--ctx)
+                                             orgzly-agenda-test--now)))
+      (should (eq (car (nth 0 sections)) 'overdue))
+      (should (equal (funcall titles (cdr (nth 0 sections))) '("late")))
+      ;; 7 day buckets follow; today keeps only its own item.
+      (should (= (length sections) 8))
+      (should (equal (funcall titles (cdr (nth 1 sections))) '("today"))))
+    (let* ((orgzly-agenda-group-scheduled-with-today t)
+           (sections (orgzly-agenda-sections entries query
+                                             (orgzly-agenda-test--ctx)
+                                             orgzly-agenda-test--now)))
+      ;; No Overdue section: the late scheduled note groups under today.
+      (should (= (length sections) 7))
+      (should (equal (funcall titles (cdr (nth 0 sections)))
+                     '("late" "today"))))))
+
 (ert-deftest orgzly-agenda-done-drops-overdue ()
   "A DONE note's overdue scheduled time must not haunt today."
   (let* ((entries (list (orgzly-agenda-test--entry

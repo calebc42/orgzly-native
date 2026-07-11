@@ -20,9 +20,8 @@
 (require 'orgzly-data)
 (require 'orgzly-query)
 
-(declare-function orgzly-ui--title-node "orgzly-ui")
-(declare-function orgzly-ui--note-action "orgzly-ui")
-(declare-function orgzly-ui--done-p "orgzly-ui")
+(declare-function orgzly-ui--note-row "orgzly-ui")
+(declare-function orgzly-ui--icon-line "orgzly-ui")
 
 (defconst orgzly-agenda--meta-color "#8a8a8a")
 
@@ -122,7 +121,9 @@ collapse into today."
                      (< (alist-get 'time a) (alist-get 'time b))))))))
 
 (defun orgzly-agenda-day-groups (entries query ctx &optional now)
-  "Agenda items grouped per day: ((DAY . ITEMS) ...), days without items kept."
+  "Agenda items grouped per day: ((DAY . ITEMS) ...), days without items kept.
+Overdue occurrences land in today's group (their `overdue-days' marks
+them); `orgzly-agenda-sections' splits them out Orgzly-style."
   (let* ((now (or now (current-time)))
          (days (or (plist-get query :agenda-days) 1))
          (items (orgzly-agenda-items entries query ctx now)))
@@ -132,6 +133,30 @@ collapse into today."
                            (cl-remove-if-not
                             (lambda (it) (= (alist-get 'day it) day))
                             items)))))
+
+(defcustom orgzly-agenda-group-scheduled-with-today nil
+  "When non-nil, overdue scheduled notes group under Today.
+Otherwise every overdue occurrence sits in the leading Overdue section,
+as Orgzly does."
+  :type 'boolean :group 'orgzly)
+
+(defun orgzly-agenda-sections (entries query ctx &optional now)
+  "Agenda sections: (`overdue' . ITEMS) first, then (DAY . ITEMS) per day.
+The Overdue section collects occurrences whose base time is before
+today — except overdue scheduled ones when
+`orgzly-agenda-group-scheduled-with-today', which stay under Today."
+  (let* ((now (or now (current-time)))
+         (groups (orgzly-agenda-day-groups entries query ctx now))
+         (overdue (cl-remove-if-not
+                   (lambda (it)
+                     (and (alist-get 'overdue-days it)
+                          (not (and orgzly-agenda-group-scheduled-with-today
+                                    (eq (alist-get 'kind it) 'scheduled)))))
+                   (cdr (car groups)))))
+    (when overdue
+      (setcdr (car groups)
+              (cl-remove-if (lambda (it) (memq it overdue)) (cdr (car groups)))))
+    (if overdue (cons (cons 'overdue overdue) groups) groups)))
 
 ;; ─── Rendering ───────────────────────────────────────────────────────────────
 
@@ -144,50 +169,40 @@ collapse into today."
      (if qualifier (format "%s · %s" qualifier label) label))))
 
 (defun orgzly-agenda--item-row (item)
+  "One agenda item as the standard Orgzly note row.
+Only the planning time responsible for the item's presence shows, and
+an overdue item carries how late it is in red."
   (let* ((entry (alist-get 'entry item))
          (kind (alist-get 'kind item))
          (overdue (alist-get 'overdue-days item))
-         (time (alist-get 'time item))
-         (ts (if (eq kind 'event)
-                 (car (alist-get 'events entry))
-               (alist-get kind entry)))
-         (timed (and ts (alist-get 'has-time ts)))
-         (qualifier
-          (cond (overdue (format "%dd ago" overdue))
-                (timed (format-time-string "%H:%M" (seconds-to-time time)))
-                (t (pcase kind
-                     ('deadline "D") ('scheduled "S") ('event "E")))))
-         (ref (orgzly-data-entry-ref entry)))
-    (jetpacs-card
-     (list
-      (jetpacs-row
-       (jetpacs-box (list (jetpacs-text qualifier 'label nil
-                                  (if overdue "#e53935" orgzly-agenda--meta-color)))
-                 :width 52)
-       (jetpacs-box
-        (list (apply #'jetpacs-column
-                     (delq nil
-                           (list (orgzly-ui--title-node entry)
-                                 (jetpacs-text (alist-get 'book entry) 'caption nil
-                                            orgzly-agenda--meta-color)))))
-        :weight 1.0
-        :on-tap (orgzly-ui--note-action "orgzly.note.open" ref))
-       (jetpacs-icon-button
-        (if (orgzly-ui--done-p entry) "check_circle" "radio_button_unchecked")
-        (orgzly-ui--note-action "orgzly.note.toggle-done" ref)
-        :content-description "Toggle done")
-       :align "center")))))
+         (row (orgzly-ui--note-row entry :show-book t :only-kind kind
+                                   :hide-content t)))
+    (if (null overdue)
+        row
+      (jetpacs-column
+       row
+       (jetpacs-row
+        (jetpacs-spacer :width 4)
+        (orgzly-ui--icon-line "history"
+                              (format "%d day%s overdue" overdue
+                                      (if (= overdue 1) "" "s"))
+                              "#e53935"))))))
+
+(defun orgzly-agenda--empty-day-node ()
+  (jetpacs-rich-text
+   (list (jetpacs-span "No notes" :color orgzly-agenda--meta-color))
+   :style 'caption :padding 8))
 
 (defun orgzly-agenda-day-nodes (entries query ctx &optional now hide-empty)
-  "Widget nodes: day headers with item rows, shared with the search view."
+  "Widget nodes: Overdue then day sections, shared with the search view."
   (let ((now (or now (current-time))))
-    (cl-loop for (day . items) in (orgzly-agenda-day-groups entries query ctx now)
-             when (or items (not hide-empty))
-             append (cons (orgzly-agenda--day-header day now)
+    (cl-loop for (day . items) in (orgzly-agenda-sections entries query ctx now)
+             when (or items (and (not (eq day 'overdue)) (not hide-empty)))
+             append (cons (if (eq day 'overdue)
+                              (jetpacs-section-header "Overdue")
+                            (orgzly-agenda--day-header day now))
                           (or (mapcar #'orgzly-agenda--item-row items)
-                              (list (jetpacs-text "No notes" 'caption nil
-                                               orgzly-agenda--meta-color
-                                               nil nil 8)))))))
+                              (list (orgzly-agenda--empty-day-node)))))))
 
 ;; ─── The agenda tab ──────────────────────────────────────────────────────────
 

@@ -14,10 +14,13 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
 
 - **Books** — notebooks are `.org` files in `orgzly-directory`:
   create/rename/delete, preface editing, a default notebook for capture.
-- **Notes** — foldable outline per book, a full note editor (state and
-  priority chips, schedule/deadline with time + repeater pickers, tags,
-  properties, org-highlighted content with the org keyboard toolbar),
-  every structure op, and Orgzly's multi-select batch toolbar.
+- **Notes** — Orgzly's outline, faithfully: flat foldable rows with
+  red/green state keywords, icon-led planning lines, inline content
+  previews, faded done notes; swipe or long-press for the quick-action
+  popup; a note editor with breadcrumbs, inline title, icon metadata
+  rows with ×-clear, the timestamp dialog (date + time + repeater),
+  tags, properties, org-highlighted content with the org keyboard
+  toolbar; every structure op and Orgzly's multi-select batch toolbar.
 - **Search** — Orgzly's dotted query language, ported faithfully
   (`b.gtd i.todo t.work s.ge.today .it.done o.p ad.7`, quoting, parens,
   and/or), plus the four seeded saved searches with full management.
@@ -28,8 +31,11 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
   across reboots by the companion.
 - **Widget & capture** — a saved-search home-screen widget with
   todo-cycle buttons; share-sheet text lands in the default notebook.
+- **Navigation** — Orgzly's drawer: every saved search and every
+  notebook one tap away, with the current one highlighted.
 - **Settings** — Orgzly's preference screens as a schema-driven,
-  Customize-persisted settings view.
+  Customize-persisted settings view, including the Display prefs
+  (content in lists, planning times, book name in results).
 
 ## Layout
 
@@ -43,7 +49,9 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
   `orgzly-settings.el`, and the `orgzly.el` entry point.
 - `emacs/build-bundle.el` — regenerates the root `orgzly.el` (app-only;
   the bundle opens with `(require 'jetpacs-core)`)
-- `test/` — 57 ERT tests, including a jetpacs-lint pass over every view.
+- `deploy.sh` / `deploy.ps1` — rebuild the bundle and push it to a
+  connected device over adb (see Getting started).
+- `test/` — 62 ERT tests, including a jetpacs-lint pass over every view.
 - `docs/PARITY.md` — the feature matrix and deliberate divergences.
 
 ## Getting started
@@ -52,7 +60,7 @@ First, build and install the companion APK from `jetpacs/` and pair it
 (see [jetpacs/README.md](jetpacs/README.md) — the companion listens,
 Emacs dials in). Then load the app in the Emacs the companion talks to,
 by any of the three routes below. All of them need the Jetpacs core
-first — the bundle `(require 's it, never copies it, so one installed
+first — the bundle `require`s it, never copies it, so one installed
 `jetpacs-core.el` serves every Jetpacs app.
 
 **Single-file bundle.** Grab `orgzly.el` from this repo's root and
@@ -73,6 +81,13 @@ on the phone — the browser saves to `/sdcard/Download`, or copy it to
 bundle adopt list and `(require 'orgzly)` after the core. On startup the
 newest staged copy is adopted into `~/.emacs.d/elisp/` automatically;
 updating the app is just downloading the file again.
+
+With the device on adb, the deploy scripts do the rebuild + staging in
+one step — `./deploy.sh` from Linux/WSL or `.\deploy.ps1` from Windows
+(the build always runs in WSL Emacs). `--core`/`-Core` also pushes the
+vendored `jetpacs-core.el` (first deploy), `--ssh`/`-Ssh` scp's straight
+into Termux's `~/.emacs.d/elisp/` (no restart-adopt), and
+`--apk`/`-Apk` builds + installs the companion.
 
 **From source.** Point `load-path` at the checkout:
 

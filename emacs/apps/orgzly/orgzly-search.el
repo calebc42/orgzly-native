@@ -64,7 +64,7 @@
                  (jetpacs-section-header
                   (format "%d result%s" n (if (= n 1) "" "s")))
                  (mapcar (lambda (e)
-                           (jetpacs-card (list (orgzly-ui--note-row e :show-book t))))
+                           (orgzly-ui--note-row e :show-book t :hide-content t))
                          shown)))))
         (error
          (list (jetpacs-card
