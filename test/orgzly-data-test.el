@@ -86,6 +86,54 @@ Inbox preface text.
    (should (equal (orgzly-data-book-preface "inbox") "Inbox preface text."))
    (should-not (orgzly-data-book-preface "gtd"))))
 
+(ert-deftest orgzly-data-getting-started-import ()
+  (orgzly-data-test--with-books
+   (should (equal (orgzly-data-import-getting-started)
+                  orgzly-data-getting-started-book))
+   ;; A real, listed book whose outline parses.
+   (should (member orgzly-data-getting-started-book
+                   (mapcar (lambda (b) (alist-get 'name b))
+                           (orgzly-data-books))))
+   (let ((entries (orgzly-data-entries orgzly-data-getting-started-book)))
+     (should (> (length entries) 20))
+     (should (cl-find "Notes" entries
+                      :key (lambda (e) (alist-get 'title e)) :test #'equal)))
+   (should (equal (orgzly-data-book-preface orgzly-data-getting-started-book)
+                  "Welcome to Orgzly!"))
+   ;; Re-import resets an existing copy, like Orgzly's.
+   (with-temp-file (orgzly-data-book-file orgzly-data-getting-started-book)
+     (insert "* Scribbled over\n"))
+   (orgzly-data-invalidate)
+   (orgzly-data-import-getting-started)
+   (should (equal (orgzly-data-book-preface orgzly-data-getting-started-book)
+                  "Welcome to Orgzly!"))))
+
+(ert-deftest orgzly-data-book-front-matter ()
+  (orgzly-data-test--with-books
+   (with-temp-file (expand-file-name "health.org" orgzly-directory)
+     (insert "#+TITLE: Health & Fitness\n"
+             "#+CREATED: [2026-07-07 Tue 14:43]\n"
+             "#+STARTUP: overview\n"
+             "#+TODO: TODO IN-PROGRESS | DONE CANCELLED\n"
+             "#+FILETAGS: :fitness:log:\n"
+             "\nPlain prose.\n\n* First\n"))
+   (orgzly-data-invalidate)
+   (let ((fm (orgzly-data-book-front-matter "health")))
+     (should (equal (alist-get 'title fm) "Health & Fitness"))
+     (should (equal (alist-get 'raw (alist-get 'created fm))
+                    "[2026-07-07 Tue 14:43]"))
+     (should (equal (alist-get 'filetags fm) '("fitness" "log")))
+     (should (equal (alist-get 'settings fm)
+                    '(("STARTUP" . "overview")
+                      ("TODO" . "TODO IN-PROGRESS | DONE CANCELLED"))))
+     (should (equal (alist-get 'body fm) "Plain prose.")))
+   ;; Prose-only preface: just the body; no preface at all: nil.
+   (let ((fm (orgzly-data-book-front-matter "inbox")))
+     (should (equal (alist-get 'body fm) "Inbox preface text."))
+     (should-not (alist-get 'title fm))
+     (should-not (alist-get 'settings fm)))
+   (should-not (orgzly-data-book-front-matter "gtd"))))
+
 ;; ─── Entry extraction ────────────────────────────────────────────────────────
 
 (ert-deftest orgzly-data-entry-fields ()

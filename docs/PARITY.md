@@ -28,7 +28,7 @@ stock jetpacs renderer; every feature below is elisp in
 | Sync | Dropbox / Git+SSH / WebDAV / SAF repos, auto-sync, conflict detection | ✅ **by architecture, not replication**: org files live in on-device Emacs, so sync is whatever Emacs/the OS does (git, syncthing, Termux ssh). Orgzly's repo/conflict model is deliberately not rebuilt — with a single source of truth there is nothing to two-way sync |
 | External API / Tasker | broadcast intents to edit/search | ✅ exceeded: the whole app is a live Emacs — any elisp, plus the jetpacs device-trigger/capability catalog |
 | Calendar provider sync | mirror query hits into an Android calendar | ❌ needs a Kotlin device capability the companion doesn't ship; excluded by the no-Kotlin constraint |
-| Getting-started notebook | seeded demo book | ➖ not seeded; the empty state points at creating a book |
+| Getting-started notebook | seeded demo book, Settings > App re-import | ✅ `orgzly-data-import-getting-started`: Orgzly's tutorial book, reworded where this app deliberately diverges; offered by the empty books state and a top-bar button (the schema settings screen has no action rows), with a confirm before resetting an existing copy. Not auto-seeded on first run — writing unasked into the user's org directory would be rude; the empty state offers it instead |
 
 ## Documented divergences (all deliberate)
 
@@ -58,12 +58,47 @@ stock jetpacs renderer; every feature below is elisp in
    companion; the Display section covers the data-side subset (content
    in lists, line count, planning times, book name in results).
 
+## Remaining gaps (surveyed 2026-07-10)
+
+A menu/manifest/preference sweep of the reference checkout turned up
+features the matrix above doesn't cover.  Pure data/elisp candidates,
+roughly by weight:
+
+- **Clocking** — clock in/out/cancel writing `LOGBOOK` `CLOCK:` lines,
+  from the editor, the quick-action popup, and the multi-select bar.
+- **Narrow to subtree / widen** — restrict the book outline to one
+  subtree (`org-narrow-to-subtree` for the note list).
+- **Focus in book** — jump from a search/agenda hit to the note in its
+  notebook, scrolled into view.
+- **Cycle visibility** — a whole-book fold cycle (`org-global-cycle`)
+  beside the per-note chevron.
+- **Edit `#+FILETAGS:`** — book-level tag dialog feeding inherited-tag
+  search (front matter already parses them).
+- **Note editor extras** — sort content lines, insert inline timestamp.
+- **New-note `:ID:`** — optional auto-ID property
+  (`pref_key_new_note_add_id`).
+- **Time-shift logging** — `LAST_REPEAT` property / logbook entry when
+  a repeater rolls (`pref_key_log_on_time_shift`).
+- **Saved-searches import/export** — JSON file round-trip.
+- **Share note as text** — quick-action/editor entry that pipes the
+  subtree through `share.text`-style device capability, if the
+  companion exposes an outbound share.
+
+Android-side (excluded by the no-Kotlin constraint, recorded for
+completeness): org-protocol/`orgzly://` deep links, launcher shortcuts
+and direct-share targets, the ongoing quick-note notification, reminder
+snooze/alarm-sound classes, inline image rendering, settings
+export/import, the app-logs screen, keep-screen-on.  Upstream has **no
+org-attach/attachments feature** — only inline image links — so none is
+owed here either.
+
 ## Test coverage
 
-`test/run-tests.sh` — 62 ERT tests: the query language ported semantics
-(26), the file-backed data layer incl. mutations and repeater-aware
-toggling (17), agenda expansion incl. the Overdue section + reminder
-windows (8), and a jetpacs-lint pass that builds **every registered view
-in every drill-in state** plus the quick-action/timestamp/tags dialogs
-and validates the produced widget specs against the wire format, along
-with title-generator and drawer semantics (11).
+`test/run-tests.sh` — 66 ERT tests: the query language ported semantics
+(26), the file-backed data layer incl. mutations, repeater-aware
+toggling, preface front matter and the Getting Started import (19),
+agenda expansion incl. the Overdue section + reminder windows (8), and a
+jetpacs-lint pass that builds **every registered view in every drill-in
+state** plus the quick-action/timestamp/tags dialogs and validates the
+produced widget specs against the wire format, along with
+title-generator, preface-abstraction and drawer semantics (13).

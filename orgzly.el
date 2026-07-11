@@ -592,6 +592,134 @@ conditions gets scheduled/deadline time prepended."
     (delete-file file)
     (orgzly-data-invalidate)))
 
+;; ─── Getting Started notebook ────────────────────────────────────────────────
+
+(defconst orgzly-data-getting-started-book "Getting Started with Orgzly"
+  "Name of the seeded tutorial notebook, as in Orgzly.")
+
+(defconst orgzly-data--getting-started "\
+Welcome to Orgzly!
+
+* Notes
+** Tap a note to open it
+** Swipe a note, or press and hold it, to open its quick-action menu
+
+Schedule, set a deadline, change state, refile, archive, cut, copy,
+paste or delete — straight from the popup.
+
+** To select several notes, tap the checklist button in the top bar
+
+Batch-change state, times or notebook for every selected note at once.
+
+** Fold a note which contains sub-notes by tapping the chevron next to it
+
+*** There is no limit to the number of levels you can have
+**** Use this to better organize your notes
+
+** Note can have tags :tag1:tag2:
+*** Sub-note inherits the tags :tag3:
+
+If you search for notes tagged with “tag1” using “t.tag1” query, this
+note will be included in the search results.
+
+*** A note that has the =ARCHIVE= tag set is grayed out :ARCHIVE:
+
+** Note can have a state
+
+You can configure any number of states to use: TODO, NEXT, DONE, etc.
+
+*** TODO There are two /types/ of states: to-do and done
+
+*** DONE This is a note with /done/ type of state
+CLOSED: [2018-01-24 Wed 17:00]
+
+** Parent notes can track state of child notes [1/3] [33%]
+
+*** TODO To track the ratio of TODO vs DONE items, add [/] to the note's title
+
+*** TODO To track the percentage of DONE vs TODO items, add [%] to the note's title
+
+*** DONE Both can be used in tandem
+CLOSED: [2025-03-13 Thu 08:37]
+
+The order doesn't matter, and the counts update when a child's state
+changes.
+
+** Note can have a scheduled time
+SCHEDULED: <2015-02-20 Fri 15:15>
+
+*** Times can have a repeater
+SCHEDULED: <2015-02-16 Mon .+2d>
+
+** You can also set a deadline time
+DEADLINE: <2015-02-20 Fri>
+
+** Event times can be used anywhere in the note's content
+
+You can have multiple event times:
+
+- <2015-02-20 Fri>
+- <2015-02-21 Sat>
+
+** Reminders for notes with scheduled, deadline, or event times are supported
+
+Mark the note as done to shift the repeater.
+
+** [#A] Note can have a priority
+
+You can change the number of priorities in Settings. You can also
+change default priority - assumed priority for notes without one set.
+
+** Basic typographical emphasis is supported
+
+You can make words *bold*, /italic/, _underlined_, =verbatim=, ~code~
+and +strike-through+.
+
+** Checkbox lists are available
+
+- [X] Task 1
+- [ ] Task 2
+- [ ] Task 3
+
+Open the note to edit them.
+
+* Search
+** There are many search operators supported
+
+You can search notes by state, tag, scheduled, deadline or event
+times, etc.
+
+** Search queries can be saved for quick access
+
+Try sample searches from the navigation drawer and note the queries
+they use.
+
+You can create your own saved searches by clicking on “Searches” in
+the navigation drawer.
+
+* Your notebooks are plain-text files
+
+Notebooks live as [[https://orgmode.org/][Org mode]] files in the
+=orgzly-directory= of your on-device Emacs — this very notebook is
+one.  Edit them from Emacs and the app side by side, and sync or
+version them with any tool you like (git, syncthing, ssh).
+"
+  "Contents of the Getting Started notebook: Orgzly's tutorial book,
+reworded where this app deliberately diverges (quick-action popup,
+checklist-toggle multi-select, left-edge fold chevron, sync by
+architecture).")
+
+(defun orgzly-data-import-getting-started ()
+  "(Re)create the Getting Started notebook and return its name.
+Like Orgzly's import, re-importing over an existing copy resets it."
+  (let ((file (orgzly-data-book-file orgzly-data-getting-started-book)))
+    (when-let ((buf (find-buffer-visiting file)))
+      (kill-buffer buf))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file (insert orgzly-data--getting-started))
+    (orgzly-data-invalidate)
+    orgzly-data-getting-started-book))
+
 (defun orgzly-data-book-preface (book)
   "Text of BOOK before its first heading, or nil when empty."
   (let ((file (orgzly-data-book-file book)))
@@ -604,6 +732,34 @@ conditions gets scheduled/deadline time prepended."
                      (point-max))))
           (let ((s (string-trim (buffer-substring (point-min) end))))
             (unless (string-empty-p s) s)))))))
+
+(defun orgzly-data-book-front-matter (book)
+  "BOOK's preface split into front matter and prose, or nil when empty.
+An alist:
+  ((title . STR|nil)                ; #+TITLE
+   (created . TS|nil)               ; #+CREATED, parsed
+   (filetags . LIST)                ; #+FILETAGS, colons stripped
+   (settings . ((KEY . VALUE)...))  ; every other #+KEYWORD line
+   (body . STR|nil))                ; the non-keyword prose"
+  (when-let ((preface (orgzly-data-book-preface book)))
+    (let (title created filetags settings body)
+      (dolist (line (split-string preface "\n"))
+        (if (string-match "^[ \t]*#\\+\\([[:alnum:]_]+\\):\\(.*\\)$" line)
+            (let* ((key (upcase (match-string 1 line)))
+                   (val (string-trim (match-string 2 line)))
+                   (ts (and (equal key "CREATED")
+                            (orgzly-data--parse-ts val))))
+              (cond (ts (setq created ts))
+                    ((and (equal key "TITLE") (not (string-empty-p val)))
+                     (setq title val))
+                    ((equal key "FILETAGS")
+                     (setq filetags (split-string val "[: \t]+" t)))
+                    (t (push (cons key val) settings))))
+          (push line body)))
+      (setq body (string-trim (string-join (nreverse body) "\n")))
+      `((title . ,title) (created . ,created) (filetags . ,filetags)
+        (settings . ,(nreverse settings))
+        (body . ,(unless (string-empty-p body) body))))))
 
 ;; ─── The scan ────────────────────────────────────────────────────────────────
 
@@ -1417,11 +1573,17 @@ selection in multi-select mode)."
 (defun orgzly-ui--books-body ()
   (let ((books (orgzly-data-books)))
     (if (null books)
-        (jetpacs-empty-state :icon "library_books" :title "No notebooks"
-                          :caption (format "Create your first notebook in %s"
-                                           orgzly-directory)
-                          :on-tap (jetpacs-action "orgzly.book.new")
-                          :action-label "New notebook")
+        (jetpacs-column
+         (jetpacs-empty-state :icon "library_books" :title "No notebooks"
+                           :caption (format "Create your first notebook in %s"
+                                            orgzly-directory)
+                           :on-tap (jetpacs-action "orgzly.book.new")
+                           :action-label "New notebook")
+         (jetpacs-button "Import Getting Started"
+                      (jetpacs-action "orgzly.book.import-getting-started"
+                                   :when-offline "drop")
+                      :variant "text" :icon "school")
+         :align "center")
       (apply #'jetpacs-lazy-column (mapcar #'orgzly-ui--book-card books)))))
 
 ;; ─── Book (note list) view ───────────────────────────────────────────────────
@@ -1487,23 +1649,55 @@ fold on-device, and swipe or long-press opens the quick-action popup."
                   :variant "text" :icon "delete")))
    :color "surface_container" :shape "rounded" :padding 4 :fill t))
 
+(defun orgzly-ui--preface-node (book)
+  "BOOK's preface abstracted the way the note editor abstracts metadata:
+the #+TITLE as a title line, CREATED and FILETAGS as icon-led lines,
+other in-buffer settings as one muted keyword summary, and only the
+non-keyword prose rendered as org text.  Tap opens the preface editor."
+  (when-let ((fm (orgzly-data-book-front-matter book)))
+    (let ((title (alist-get 'title fm))
+          (created (alist-get 'created fm))
+          (filetags (alist-get 'filetags fm))
+          (settings (alist-get 'settings fm))
+          (body (alist-get 'body fm)))
+      (jetpacs-box
+       (list
+        (apply #'jetpacs-column
+               (append
+                (delq nil
+                      (list
+                       (when title
+                         (jetpacs-rich-text
+                          (list (jetpacs-span title :bold t))
+                          :style 'title))
+                       (when created
+                         (orgzly-ui--icon-line
+                          "access_time"
+                          (concat "Created " (orgzly-ui--ts-label created))))
+                       (when filetags
+                         (orgzly-ui--icon-line
+                          "label" (string-join filetags " ")))
+                       (when settings
+                         (orgzly-ui--icon-line
+                          "tune" (mapconcat #'car settings ", ")))
+                       (when body
+                         (jetpacs-markup body :syntax "org"
+                                      :style 'caption))))
+                '(:spacing 4))))
+       :padding 8
+       :on-tap (jetpacs-action "orgzly.book.preface"
+                            :args `((book . ,book))
+                            :when-offline "drop")))))
+
 (defun orgzly-ui--book-body ()
   (let* ((book orgzly-ui--current-book)
-         (entries (orgzly-data-entries book))
-         (preface (orgzly-data-book-preface book)))
+         (entries (orgzly-data-entries book)))
     (apply #'jetpacs-lazy-column
            (delq nil
                  (append
                   (when orgzly-ui--select-mode
                     (list (orgzly-ui--selection-bar)))
-                  (when preface
-                    (list (jetpacs-box
-                           (list (jetpacs-markup preface :syntax "org"
-                                              :style 'caption))
-                           :padding 8
-                           :on-tap (jetpacs-action "orgzly.book.preface"
-                                                :args `((book . ,book))
-                                                :when-offline "drop"))))
+                  (list (orgzly-ui--preface-node book))
                   (or (mapcar #'orgzly-ui--note-node
                               (orgzly-ui--forest-of entries 1))
                       (list (jetpacs-empty-state
@@ -1842,6 +2036,21 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
 (jetpacs-shell-define-view "orgzly.books"
   :builder (lambda (snackbar)
              (jetpacs-shell-tab-view "orgzly.books" (orgzly-ui--books-body)
+                                  :top-bar
+                                  (jetpacs-shell-default-top-bar
+                                   "Books"
+                                   :extra-actions
+                                   ;; The top bar renders icon buttons only —
+                                   ;; the import lives here because the schema
+                                   ;; settings screen has no action rows
+                                   ;; (upstream keeps it in Settings > App).
+                                   (list (jetpacs-icon-button
+                                          "school"
+                                          (jetpacs-action
+                                           "orgzly.book.import-getting-started"
+                                           :when-offline "drop")
+                                          :content-description
+                                          "Import Getting Started")))
                                   :snackbar snackbar
                                   :fab (jetpacs-fab "create_new_folder"
                                                  :on-tap (jetpacs-action
@@ -1879,6 +2088,19 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
       (unless (string-empty-p name)
         (orgzly-data-create-book name)
         (jetpacs-shell-notify (format "Created %s" name))
+        (jetpacs-shell-push)))))
+
+(jetpacs-defaction "orgzly.book.import-getting-started"
+  ;; Orgzly's "Import Getting Started with Orgzly" (Settings > App):
+  ;; create the tutorial notebook; confirm before resetting an existing
+  ;; copy (upstream re-imports silently — but a stray top-bar tap here
+  ;; shouldn't discard edits).
+  (lambda (_ _)
+    (let ((book orgzly-data-getting-started-book))
+      (when (or (not (file-exists-p (orgzly-data-book-file book)))
+                (y-or-n-p (format "%s exists — replace it? " book)))
+        (orgzly-data-import-getting-started)
+        (jetpacs-shell-notify (format "Imported %s" book))
         (jetpacs-shell-push)))))
 
 (jetpacs-defaction "orgzly.book.rename"

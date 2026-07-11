@@ -39,7 +39,10 @@ Bring the slides
            (with-temp-file (expand-file-name "gtd.org" dir)
              (insert orgzly-views-test--gtd))
            (with-temp-file (expand-file-name "inbox.org" dir)
-             (insert "Preface here.\n\n* Loose thought\n"))
+             (insert "#+TITLE: Inbox\n"
+                     "#+CREATED: [2026-07-07 Tue 14:43]\n"
+                     "#+STARTUP: overview\n\n"
+                     "Preface here.\n\n* Loose thought\n"))
            (orgzly-data-invalidate)
            ,@body)
        (dolist (buf (buffer-list))
@@ -68,12 +71,34 @@ Bring the slides
 
 (ert-deftest orgzly-views-lint-book-view ()
   (orgzly-views-test--with-app
+   ;; gtd has no preface; inbox has front matter plus prose.
+   (dolist (book '("gtd" "inbox"))
+     (setq orgzly-ui--current-book book)
+     (orgzly-views-test--build-and-lint "orgzly.book"))
    (setq orgzly-ui--current-book "gtd")
-   (orgzly-views-test--build-and-lint "orgzly.book")
    ;; And in multi-select mode with a selection.
    (setq orgzly-ui--select-mode t
          orgzly-ui--selection
          (list (orgzly-data-entry-ref (car (orgzly-data-entries "gtd")))))
+   (orgzly-views-test--build-and-lint "orgzly.book")
+   (orgzly-ui--reset-drill-in)))
+
+(ert-deftest orgzly-views-getting-started ()
+  "Empty books view offers the import; the imported tutorial renders."
+  (orgzly-views-test--with-app
+   ;; With no notebooks at all, the empty state carries the import button.
+   (dolist (book '("gtd" "inbox"))
+     (orgzly-data-delete-book book))
+   (let ((strings (orgzly-views-test--strings
+                   (orgzly-views-test--build-and-lint "orgzly.books"))))
+     (should (member "Import Getting Started" strings)))
+   ;; The imported book lists, lints as a books card, and its whole
+   ;; outline (states, tags, priorities, planning, checkboxes) renders.
+   (orgzly-data-import-getting-started)
+   (let ((strings (orgzly-views-test--strings
+                   (orgzly-views-test--build-and-lint "orgzly.books"))))
+     (should (member orgzly-data-getting-started-book strings)))
+   (setq orgzly-ui--current-book orgzly-data-getting-started-book)
    (orgzly-views-test--build-and-lint "orgzly.book")
    (orgzly-ui--reset-drill-in)))
 
@@ -127,6 +152,14 @@ Bring the slides
   "The span alists of a rich-text NODE, as a list."
   (append (alist-get 'spans node) nil))
 
+(defun orgzly-views-test--strings (node)
+  "Every string anywhere in spec NODE, flattened."
+  (cond ((stringp node) (list node))
+        ((vectorp node) (mapcan #'orgzly-views-test--strings
+                                (append node nil)))
+        ((consp node) (append (orgzly-views-test--strings (car node))
+                              (orgzly-views-test--strings (cdr node))))))
+
 (ert-deftest orgzly-views-title-follows-orgzly ()
   "STATE  #A  Title  tags — red open state, green done, no colons, no strike."
   (orgzly-views-test--with-app
@@ -167,6 +200,22 @@ Bring the slides
      (let ((spans (orgzly-views-test--spans
                    (orgzly-ui--title-node entry))))
        (should-not (equal (alist-get 'text (car (last spans))) "  1"))))))
+
+(ert-deftest orgzly-views-book-preface-abstracted ()
+  "Front matter renders as abstracted lines, never as raw #+KEYWORD text."
+  (orgzly-views-test--with-app
+   (setq orgzly-ui--current-book "inbox")
+   (let ((strings (orgzly-views-test--strings
+                   (orgzly-views-test--build-and-lint "orgzly.book"))))
+     ;; No raw keyword lines leak through.
+     (should-not (cl-some (lambda (s) (string-match-p "#\\+" s)) strings))
+     ;; #+TITLE becomes the title line, #+CREATED an icon line,
+     ;; #+STARTUP a settings summary, and the prose still shows.
+     (should (member "Inbox" strings))
+     (should (cl-some (lambda (s) (string-prefix-p "Created " s)) strings))
+     (should (member "STARTUP" strings))
+     (should (member "Preface here." strings)))
+   (orgzly-ui--reset-drill-in)))
 
 ;; ─── Dialog specs ────────────────────────────────────────────────────────────
 

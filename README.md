@@ -13,7 +13,8 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
 ## What you get
 
 - **Books** — notebooks are `.org` files in `orgzly-directory`:
-  create/rename/delete, preface editing, a default notebook for capture.
+  create/rename/delete, preface editing, a default notebook for capture,
+  and Orgzly's Getting Started tutorial book one tap away.
 - **Notes** — Orgzly's outline, faithfully: flat foldable rows with
   red/green state keywords, icon-led planning lines, inline content
   previews, faded done notes; swipe or long-press for the quick-action
@@ -51,7 +52,7 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
   the bundle opens with `(require 'jetpacs-core)`)
 - `deploy.sh` / `deploy.ps1` — rebuild the bundle and push it to a
   connected device over adb (see Getting started).
-- `test/` — 62 ERT tests, including a jetpacs-lint pass over every view.
+- `test/` — 66 ERT tests, including a jetpacs-lint pass over every view.
 - `docs/PARITY.md` — the feature matrix and deliberate divergences.
 
 ## Getting started
