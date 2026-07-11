@@ -404,16 +404,18 @@ Point must be at a heading start; leaves point unchanged."
         (scheduled . ,scheduled) (deadline . ,deadline)
         (closed . ,closed) (created . ,created)
         (events . ,events)
-        (content . ,(car content-info))
-        (content-lines . ,(cdr content-info))
+        (content . ,(nth 0 content-info))
+        (content-lines . ,(nth 1 content-info))
+        (content-pos . ,(nth 2 content-info))
         (has-children . ,(save-excursion
                            (org-goto-first-child)
                            (not (= pos (point)))))))))
 
 (defun orgzly-data--entry-content ()
-  "Content of the entry at point as (TEXT . LINE-COUNT).
+  "Content of the entry at point as (TEXT LINE-COUNT BEGIN).
 The text between the metadata (planning line, property/logbook drawers)
-and the next heading — Orgzly's note content."
+and the next heading — Orgzly's note content.  BEGIN is its buffer
+position, which the rich renderer uses to anchor in-place edits."
   (save-excursion
     (org-back-to-heading t)
     (forward-line 1)
@@ -434,9 +436,10 @@ and the next heading — Orgzly's note content."
            (end (if (org-at-heading-p) (point)
                   (progn (outline-next-heading) (point))))
            (text (string-trim-right (buffer-substring-no-properties beg end))))
-      (cons text
+      (list text
             (if (string-empty-p text) 0
-              (1+ (cl-count ?\n text)))))))
+              (1+ (cl-count ?\n text)))
+            beg))))
 
 (defun orgzly-data--entry-events (title content)
   "Plain active timestamps in TITLE and CONTENT as a list of TS alists."

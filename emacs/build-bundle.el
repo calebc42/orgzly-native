@@ -31,6 +31,7 @@
        ;; graph.
        (app-files '("apps/orgzly/orgzly-query.el"
                     "apps/orgzly/orgzly-data.el"
+                    "apps/orgzly/orgzly-rich.el"
                     "apps/orgzly/orgzly-ui.el"
                     "apps/orgzly/orgzly-agenda.el"
                     "apps/orgzly/orgzly-search.el"

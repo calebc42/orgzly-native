@@ -11,6 +11,7 @@ EMACS="${EMACS:-emacs}"
   -L test \
   -l orgzly-query-test \
   -l orgzly-data-test \
+  -l orgzly-rich-test \
   -l orgzly-agenda-test \
   -l orgzly-views-test \
   -f ert-run-tests-batch-and-exit </dev/null

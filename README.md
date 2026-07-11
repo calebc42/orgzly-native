@@ -19,9 +19,15 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
   red/green state keywords, icon-led planning lines, inline content
   previews, faded done notes; swipe or long-press for the quick-action
   popup; a note editor with breadcrumbs, inline title, icon metadata
-  rows with ×-clear, the timestamp dialog (date + time + repeater),
-  tags, properties, org-highlighted content with the org keyboard
-  toolbar; every structure op and Orgzly's multi-select batch toolbar.
+  rows with ×-clear, the timestamp dialog (date + time + end + repeater
+  + warning), tags, properties; every structure op and Orgzly's
+  multi-select batch toolbar.
+- **Rich content** — note bodies render as native styled text, no
+  view/edit mode: tap a block to edit it in place, toggle checkboxes,
+  tap links; org tables are native grids (cell tap-to-edit,
+  formula-aware, row/column ops, Emacs-side #+TBLFM recalculation); src
+  blocks run via org-babel (confirm + timeout guardrails) with
+  #+RESULTS folding read-only.
 - **Search** — Orgzly's dotted query language, ported faithfully
   (`b.gtd i.todo t.work s.ge.today .it.done o.p ad.7`, quoting, parens,
   and/or), plus the four seeded saved searches with full management.
@@ -52,7 +58,7 @@ is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
   the bundle opens with `(require 'jetpacs-core)`)
 - `deploy.sh` / `deploy.ps1` — rebuild the bundle and push it to a
   connected device over adb (see Getting started).
-- `test/` — 82 ERT tests, including a jetpacs-lint pass over every view.
+- `test/` — 94 ERT tests, including a jetpacs-lint pass over every view.
 - `docs/PARITY.md` — the feature matrix and deliberate divergences.
 
 ## Getting started

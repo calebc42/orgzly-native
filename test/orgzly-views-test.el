@@ -26,6 +26,16 @@ CLOSED: [2026-07-08 Wed 18:00] DEADLINE: <2026-07-08 Wed>
 SCHEDULED: <2026-07-09 Thu>
 * Meeting <2026-07-15 Wed 09:00>
 Bring the slides
+* Rich note
+| Item | Qty |
+|------+-----|
+| Foo  |   1 |
+
+- [ ] task one
+
+#+begin_src emacs-lisp
+\(+ 1 2)
+#+end_src
 ")
 
 (defmacro orgzly-views-test--with-app (&rest body)
@@ -136,6 +146,61 @@ Bring the slides
    (setq orgzly-ui--note-ref '((file . "/nope.org") (pos . 1) (title . "x")))
    (orgzly-views-test--build-and-lint "orgzly.note")
    (orgzly-ui--reset-drill-in)))
+
+(ert-deftest orgzly-views-note-rich-content ()
+  "The note view renders content as rich blocks with in-place editing:
+a native table, an interactive checkbox, a runnable src block, and
+tap-to-edit blocks — no view/edit mode."
+  (orgzly-views-test--with-app
+   (require 'ob-emacs-lisp)
+   (let ((entry (cl-find "Rich note" (orgzly-data-entries "gtd")
+                         :key (lambda (e) (alist-get 'title e))
+                         :test #'equal)))
+     (setq orgzly-ui--note-ref (orgzly-data-entry-ref entry))
+     (let ((strings (orgzly-views-test--strings
+                     (orgzly-views-test--build-and-lint "orgzly.note"))))
+       (should (member "Foo" strings))
+       (should (member "orgzly.table.edit" strings))
+       (should (member "orgzly.checkbox.toggle" strings))
+       (should (member "orgzly.babel.execute" strings))
+       (should (member "orgzly.note.edit-block" strings))
+       ;; The raw editor is gone from the regular surface.
+       (should-not (member "orgzly.note.set-content" strings)))
+     ;; The escape hatch brings the whole-content org editor back.
+     (let ((orgzly-ui--raw-note t))
+       (should (member "orgzly.note.set-content"
+                       (orgzly-views-test--strings
+                        (orgzly-views-test--build-and-lint "orgzly.note")))))
+     ;; Opening a block swaps just it for an editor.
+     (let* ((file (alist-get 'file entry))
+            (cpos (alist-get 'content-pos entry)))
+       (setq orgzly-ui--edit-block (list file cpos (+ cpos 40)))
+       (should (member "orgzly.note.save-block"
+                       (orgzly-views-test--strings
+                        (orgzly-views-test--build-and-lint "orgzly.note"))))))
+   (orgzly-ui--reset-drill-in)))
+
+(ert-deftest orgzly-views-save-block-round-trip ()
+  "The in-place block editor's save writes the region back."
+  (orgzly-views-test--with-app
+   (let* ((entry (cl-find "Rich note" (orgzly-data-entries "gtd")
+                          :key (lambda (e) (alist-get 'title e))
+                          :test #'equal))
+          (file (alist-get 'file entry))
+          (cpos (alist-get 'content-pos entry)))
+     (cl-letf (((symbol-function 'jetpacs-shell-push) #'ignore)
+               ((symbol-function 'jetpacs-shell-notify) #'ignore))
+       (funcall (gethash "orgzly.note.save-block" jetpacs-action-handlers)
+                `((file . ,file) (beg . ,cpos) (end . ,cpos)
+                  (value . "Lead paragraph."))
+                nil))
+     (let ((fresh (cl-find "Rich note" (orgzly-data-entries "gtd")
+                           :key (lambda (e) (alist-get 'title e))
+                           :test #'equal)))
+       (should (string-prefix-p "Lead paragraph."
+                                (alist-get 'content fresh)))
+       ;; The table below survived intact.
+       (should (string-match-p "| Foo" (alist-get 'content fresh)))))))
 
 (ert-deftest orgzly-views-lint-preface-and-searches ()
   (orgzly-views-test--with-app

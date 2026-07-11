@@ -15,7 +15,7 @@ stock jetpacs renderer; every feature below is elisp in
 | Notebooks | list, create, rename, delete, preface, `#+TITLE` cards, file tags, default notebook | ✅ `orgzly-books`/`orgzly-data`: books = `.org` files in `orgzly-directory`; Orgzly's book cards (`#+TITLE` headline with filename subtitle, icon-led mtime/count lines); create/rename/delete via menus (bridged prompts); preface viewer/editor; File tags dialog writing `#+FILETAGS:` (inherited by every note, `t.` searches see them); default book (★) via menu |
 | Note list | outline per book, fold, narrow/widen, cycle visibility, state/priority/tags shown, planning under title, content shown inline, content line count | ✅ `book` drill-in follows `item_head`: flat foldable outline (client-side fold state, chevron ▸/▾ per note), narrow-to-subtree from the popup with a Widen top-bar button, whole-book visibility cycle (fold-id generations reset the on-device fold state), `STATE  #A  Title  tags` titles with Orgzly's red-open/green-done keywords, done/archived rows faded whole (45%-alpha emulation), icon-led planning lines (scheduled/deadline/event/closed, Orgzly time format), inline org-highlighted content preview that folds with the subtree, line count when content hidden |
 | Note popup | swipe a note → quick-action buttons (schedule, deadline, state, done, new, refile, clock, focus, delete…) | ✅ swipe or long-press any note row — on the book outline, search results, and the agenda — → quick-action dialog: Schedule/Deadline date pickers, State, Done, New above/under/below, Refile, Archive, Focus (jump to the note in its book, scrolled into view), Clock in/out/cancel, Cut/Copy/Paste below, Delete |
-| Note editor | breadcrumbs, notebook row, inline title, icon metadata rows with ×-clear, timestamp dialog, tags, properties, content | ✅ `note` view mirrors `fragment_note`: tappable breadcrumbs (book › ancestors), notebook row (tap = refile), inline title field, icon-led metadata rows (tags / state / priority / scheduled / deadline / closed) each with × to clear, Orgzly-style timestamp dialog (date + time + repeater + clear), tag-picker dialog with add, property add/delete, org-highlighted content editor with the org keyboard toolbar; the timestamp dialog carries date (with Today/Tomorrow/Next-week shortcuts), time (×-drop keeps the date), end time, repeater, and the warning/delay cookie, every cookie round-tripping through edits; the CLOSED row edits and clears like upstream's; clock in/out/cancel and sort-content-lines in the overflow menu. ⚠ no save/discard-modified flow (mutations commit instantly) |
+| Note editor | breadcrumbs, notebook row, inline title, icon metadata rows with ×-clear, timestamp dialog, tags, properties, content | ✅ `note` view mirrors `fragment_note`: tappable breadcrumbs (book › ancestors), notebook row (tap = refile), inline title field, icon-led metadata rows (tags / state / priority / scheduled / deadline / closed) each with × to clear, Orgzly-style timestamp dialog (date + time + repeater + clear), tag-picker dialog with add, property add/delete, **content renders rich with in-place block editing (exceeds upstream)**: paragraphs/lists as native styled text, tappable links (notebook links navigate in-app), toggling checkboxes, org tables as native grids (tap a cell to edit — a #+TBLFM-computed field opens its formula; long-press for row/column ops; "+" appends; formulas recalculate Emacs-side), runnable src blocks (babel with confirm + timeout guardrails, #+RESULTS folding read-only), and tap-any-block → an inline org editor for just that block — no view/edit mode; "Edit source" in the overflow menu is the raw escape hatch. The timestamp dialog carries date (with Today/Tomorrow/Next-week shortcuts), time (×-drop keeps the date), end time, repeater, and the warning/delay cookie, every cookie round-tripping through edits; the CLOSED row edits and clears like upstream's; clock in/out/cancel and sort-content-lines in the overflow menu |
 | Structure ops | promote/demote, move up/down, cut/copy/paste, delete, refile to book, archive | ✅ all, from the editor's overflow menu and the quick-action popup; delete confirms; refile via bridged book picker; paste below note or into book |
 | Multi-select | batch state/schedule/deadline/refile/archive/delete + the "move" CAB (promote/demote/up/down) + cut/copy, count in the top bar | ✅ select mode toggle on the book, search, and agenda views: per-row checkboxes, "N selected" top-bar title (book), action bar with State / Done / Schedule / Deadline / Refile / Archive / Delete plus Promote / Demote / Up / Down / Cut / Copy / Clock in/out/cancel (order-aware so positions stay valid; batch cut/copy is one paste-able block) |
 | Search language | `b. i. it. p. ps. t. tn. s. d. e. c. cr.` with `eq/ne/lt/le/gt/ge`, intervals (`none now today tomorrow yesterday ±Nh/d/w/m/y`), `.`‑negation, quoting, parens, and/or with AND-precedence, `o.*` sort, `ad.N` | ✅ `orgzly-query.el` is a port of QueryTokenizer/QueryParser/DottedQueryParser incl. the implicit-AND-inside-OR regrouping; matcher mirrors SqliteQueryBuilder (LIKE-style substring tags/text, default priority for `p.`, state classes from org config, per-event matching with range ends, per-unit boundary truncation, upstream's timed-before-all-day and priority-tiebreak sort order) — 27 dedicated tests |
@@ -61,6 +61,13 @@ stock jetpacs renderer; every feature below is elisp in
    one-sided `LOWER()` makes any uppercase priority query match
    nothing) and `s.5D` parses as an interval (upstream falls back to
    free-text search) — both look like upstream quirks, not intent.
+10. **Block-based content editing, no editor modes.**  Upstream's note
+    editor is a form with save/discard and a separate view mode; here
+    rendered content is the only surface (the Notion/Obsidian shape) —
+    tapping a block opens an inline editor with its own save/cancel,
+    metadata rows commit instantly, and the raw whole-content editor
+    is an overflow-menu escape hatch.  A whole-note discard flow is
+    deliberately absent.
 
 ## Remaining gaps (adversarial re-check 2026-07-11; fix pass same day)
 
@@ -96,11 +103,10 @@ visibility cycle (fold-id generations), multi-day `<a>--<b>` agenda
 ranges (daily catch-up expansion, capped at the range's end),
 saved-searches JSON import/export, and sort-content-lines.
 
-- **Editor** — save/discard flow with modified detection (mutations
-  commit instantly; breadcrumbs navigate without a guard); inline
-  property editing + name autocomplete; insert inline timestamp (needs
-  the client-side cursor); rendered view-mode (checkbox toggle / link
-  taps in content).
+- **Editor** — inline property editing + name autocomplete; insert
+  inline timestamp (needs the client-side cursor).  (The rendered
+  view-mode and save/discard items closed with block-based editing —
+  divergence 10.)
 - **Share note as text** — needs an outbound-share device capability.
 - **Book export** — ➖ N/A by architecture: a notebook already is a
   plain org file the user owns on disk.
@@ -120,7 +126,10 @@ owed here either.
 
 ## Test coverage
 
-`test/run-tests.sh` — 82 ERT tests: the query language ported semantics
+`test/run-tests.sh` — 94 ERT tests: the rich renderer (native tables
+with alignment/cookies/headers, babel play-gating and an execute round
+trip, #+RESULTS read-only folding, interactive checkboxes, in-place
+block editing round trips) (12), the query language ported semantics
 incl. per-event matching and the sort tiebreaks (27), the file-backed
 data layer incl. mutations, cookie and range parsing, planning
 round-trip, CLOSED editing, clocking, file tags, sibling creation,

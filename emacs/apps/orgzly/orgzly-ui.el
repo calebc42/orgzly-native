@@ -36,6 +36,7 @@
 (require 'jetpacs-surfaces)
 (require 'orgzly-data)
 (require 'orgzly-query)
+(require 'orgzly-rich)
 
 ;; ─── Display preferences (Orgzly's Display settings) ─────────────────────────
 
@@ -88,6 +89,16 @@ Orgzly shows the full content, so the cap defaults off."
 (defvar orgzly-ui--narrow-ref nil
   "Ref whose subtree the book view is narrowed to, or nil (upstream's narrow).")
 
+(defvar orgzly-ui--edit-block nil
+  "(FILE BEG END) of the content block being edited in place, or nil.
+The Notion-style flow: the note's content is always rendered; tapping
+a block swaps just that block for an org editor.")
+
+(defvar orgzly-ui--raw-note nil
+  "Non-nil while the current note's content shows the raw org editor.
+The escape hatch behind the overflow menu — rendered blocks with
+in-place editing are the only regular mode.")
+
 (defvar orgzly-ui--fold-generation 0
   "Bumped by the visibility cycle: fold state lives on-device keyed by
 collapsible id, so new ids are the only way to reset it.")
@@ -103,7 +114,9 @@ collapsible id, so new ids are the only way to reset it.")
         orgzly-ui--select-mode nil
         orgzly-ui--selection nil
         orgzly-ui--focus-ref nil
-        orgzly-ui--narrow-ref nil))
+        orgzly-ui--narrow-ref nil
+        orgzly-ui--edit-block nil
+        orgzly-ui--raw-note nil))
 
 (add-hook 'jetpacs-shell-view-switched-hook #'orgzly-ui--reset-drill-in)
 (add-hook 'jetpacs-shell-refresh-hook #'orgzly-data-invalidate)
@@ -857,12 +870,59 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
                 (apply #'jetpacs-column
                        (orgzly-ui--properties-nodes entry))
                 (jetpacs-divider)
-                (jetpacs-editor (format "orgzly:%s:%s" (alist-get 'file entry)
-                                     (alist-get 'pos entry))
-                             (alist-get 'content entry)
-                             :on-save (orgzly-ui--note-action
-                                       "orgzly.note.set-content" ref)
-                             :syntax "org" :toolbar "org" :chromeless t))))))))
+                (orgzly-ui--content-area entry ref))))))))
+
+(defun orgzly-ui--content-area (entry ref)
+  "ENTRY's content: rendered blocks editing in place, or the raw editor.
+No view/edit mode — rendered rich content is the only regular surface
+(tap a block to edit just it, toggle checkboxes, tap table cells, run
+src blocks); `orgzly-ui--raw-note' (the overflow menu's escape hatch)
+swaps in the whole-content org editor."
+  (let* ((file (alist-get 'file entry))
+         (content (alist-get 'content entry))
+         (cpos (alist-get 'content-pos entry)))
+    (cond
+     ((or orgzly-ui--raw-note (null cpos))
+      (jetpacs-editor (format "orgzly:%s:%s" file (alist-get 'pos entry))
+                   content
+                   :on-save (orgzly-ui--note-action
+                             "orgzly.note.set-content" ref)
+                   :syntax "org" :toolbar "org" :chromeless t))
+     ;; Empty content: the tap-to-add block, or its open editor.
+     ((string-empty-p (or content ""))
+      (if (and orgzly-ui--edit-block
+               (equal (car orgzly-ui--edit-block) file))
+          (jetpacs-column
+           (jetpacs-editor (format "orgzly-block:%s:%s" file cpos) ""
+                        :on-save (jetpacs-action
+                                  "orgzly.note.save-block"
+                                  :args `((file . ,file)
+                                          (beg . ,cpos) (end . ,cpos)))
+                        :syntax "org" :toolbar "org" :chromeless t)
+           (jetpacs-row
+            (jetpacs-spacer :weight 1.0)
+            (jetpacs-button "Cancel"
+                         (jetpacs-action "orgzly.note.cancel-block")
+                         :variant "text")))
+        (jetpacs-box
+         (list (jetpacs-text "Tap to add content" 'caption nil
+                          orgzly-ui--muted-color))
+         :padding 8
+         :on-tap (jetpacs-action "orgzly.note.edit-block"
+                              :args `((file . ,file)
+                                      (beg . ,cpos) (end . ,cpos))
+                              :when-offline "drop"))))
+     (t
+      (let ((orgzly-rich--edit-region
+             (and orgzly-ui--edit-block
+                  (equal (car orgzly-ui--edit-block) file)
+                  (cons (nth 1 orgzly-ui--edit-block)
+                        (nth 2 orgzly-ui--edit-block)))))
+        (apply #'jetpacs-column
+               (append (orgzly-rich-body content
+                                         (file-name-directory file)
+                                         file (1- cpos))
+                       '(:spacing 6))))))))
 
 (defun orgzly-ui--note-menu (entry-or-ref)
   "The note editor's overflow menu: structure and clipboard operations."
@@ -880,6 +940,10 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
       (jetpacs-menu-item "Archive"
                       (orgzly-ui--note-action "orgzly.note.archive" ref)
                       :icon "archive")
+      (jetpacs-menu-item (if orgzly-ui--raw-note "Rendered content"
+                        "Edit source")
+                      (orgzly-ui--note-action "orgzly.note.toggle-raw" ref)
+                      :icon "code")
       (jetpacs-menu-item "Sort content lines"
                       (orgzly-ui--note-action "orgzly.note.sort-content" ref)
                       :icon "sort_by_alpha")
@@ -1307,7 +1371,9 @@ time (keeping the date) or just the end."
 (jetpacs-defaction "orgzly.note.open"
   (lambda (args _)
     (let ((ref (orgzly-ui--args-ref args)))
-      (setq orgzly-ui--note-ref ref)
+      (setq orgzly-ui--note-ref ref
+            orgzly-ui--edit-block nil
+            orgzly-ui--raw-note nil)
       (unless orgzly-ui--current-book
         (setq orgzly-ui--current-book
               (orgzly-data-book-name (alist-get 'file ref))))
@@ -1556,6 +1622,54 @@ time (keeping the date) or just the end."
   (lambda (args _)
     (orgzly-data-copy-note (orgzly-ui--args-ref args))
     (orgzly-ui--after-mutation "Copied")))
+
+;; In-place block editing (the rendered content's only edit path).
+
+(jetpacs-defaction "orgzly.note.edit-block"
+  (lambda (args _)
+    (setq orgzly-ui--edit-block (list (alist-get 'file args)
+                                      (alist-get 'beg args)
+                                      (alist-get 'end args)))
+    (jetpacs-shell-push)))
+
+(jetpacs-defaction "orgzly.note.cancel-block"
+  (lambda (_ _)
+    (setq orgzly-ui--edit-block nil)
+    (jetpacs-shell-push)))
+
+(jetpacs-defaction "orgzly.note.save-block"
+  ;; Replace the block's region with the edited text.  The original
+  ;; trailing whitespace (the element's post-blank) is preserved so
+  ;; neighbouring blocks never jam together; an emptied block is
+  ;; removed outright.
+  (lambda (args _)
+    (let ((file (alist-get 'file args))
+          (beg (alist-get 'beg args))
+          (end (alist-get 'end args))
+          (value (or (alist-get 'value args) "")))
+      (when (and file beg end (file-readable-p file))
+        (with-current-buffer (find-file-noselect file)
+          (org-with-wide-buffer
+           (let* ((end (min end (point-max)))
+                  (orig (buffer-substring-no-properties beg end))
+                  (trail (if (string-match "\\([ \t\n]*\\)\\'" orig)
+                             (match-string 1 orig)
+                           "")))
+             (delete-region beg end)
+             (goto-char beg)
+             (unless (string-empty-p (string-trim value))
+               (insert (string-trim-right value)
+                       (if (string-empty-p trail) "\n" trail)))))
+          (let ((save-silently t)) (save-buffer)))
+        (setq orgzly-ui--edit-block nil)
+        (orgzly-data-invalidate)
+        (orgzly-ui--after-mutation nil)))))
+
+(jetpacs-defaction "orgzly.note.toggle-raw"
+  (lambda (_ _)
+    (setq orgzly-ui--raw-note (not orgzly-ui--raw-note)
+          orgzly-ui--edit-block nil)
+    (jetpacs-shell-push)))
 
 (jetpacs-defaction "orgzly.note.sort-content"
   ;; Upstream's "Sort note's content" — alphabetical over the lines.
