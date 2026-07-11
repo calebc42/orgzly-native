@@ -277,21 +277,18 @@ TS nil means the entry has no such timestamp."
              ('ge (>= ts b)))))))
 
 (defun orgzly-query--events-in-relation-p (events rel interval now)
-  "Match EVENTS (a list of float times) against REL/INTERVAL at NOW.
-Mirrors upstream's use of the note's earliest event start and latest
-event end (here: min and max of EVENTS)."
+  "Match EVENTS ((START END HAS-TIME) triples) against REL/INTERVAL at NOW.
+Upstream expands one row per event, so a note matches when ANY single
+event satisfies the relation; `gt'/`ge' compare the event's end
+(event_end_timestamp), the rest its start."
   (if (eq (car interval) 'none)
       (null events)
-    (and events
-         (let ((emin (apply #'min events))
-               (emax (apply #'max events)))
-           (pcase rel
-             ('eq (and (orgzly-query--time-in-relation-p emin 'ge interval now)
-                       (orgzly-query--time-in-relation-p emax 'le interval now)))
-             ('ne (and (orgzly-query--time-in-relation-p emin 'lt interval now)
-                       (orgzly-query--time-in-relation-p emax 'gt interval now)))
-             ((or 'lt 'le) (orgzly-query--time-in-relation-p emin rel interval now))
-             ((or 'gt 'ge) (orgzly-query--time-in-relation-p emax rel interval now)))))))
+    (and (cl-some (lambda (ev)
+                    (orgzly-query--time-in-relation-p
+                     (if (memq rel '(gt ge)) (nth 1 ev) (nth 0 ev))
+                     rel interval now))
+                  events)
+         t)))
 
 ;; ─── Entry accessors ─────────────────────────────────────────────────────────
 ;;
@@ -299,15 +296,22 @@ event end (here: min and max of EVENTS)."
 ;;   book file pos level title state priority tags itags
 ;;   scheduled deadline closed created events content
 ;; Timestamp values are alists ((time . FLOAT) (has-time . BOOL)
-;; (raw . STR) (repeater . STR)); `events' is a list of those.
+;; (raw . STR) (repeater . STR) (end-time . FLOAT) (warning . STR));
+;; `events' is a list of those.
 
 (defun orgzly-query--entry-time (entry kind)
   "Float time of ENTRY's KIND timestamp, or nil."
   (alist-get 'time (alist-get kind entry)))
 
 (defun orgzly-query--entry-events (entry)
-  "List of float times of ENTRY's plain active timestamps."
-  (delq nil (mapcar (lambda (ts) (alist-get 'time ts))
+  "ENTRY's plain active timestamps as (START END HAS-TIME) triples.
+END falls back to START when the stamp has no time range — upstream's
+event_end_timestamp COALESCE."
+  (delq nil (mapcar (lambda (ts)
+                      (when-let ((start (alist-get 'time ts)))
+                        (list start
+                              (or (alist-get 'end-time ts) start)
+                              (alist-get 'has-time ts))))
                     (alist-get 'events entry))))
 
 ;; ─── Matcher ─────────────────────────────────────────────────────────────────
@@ -391,27 +395,52 @@ A nil COND matches everything."
     (or (cl-position state seq :test #'equal)
         (if state (length seq) (1+ (length seq))))))
 
-(defun orgzly-query--sort-value (entry key ctx)
-  "Comparable value of ENTRY under sort KEY."
+(defun orgzly-query--time-sort-value (time has-time)
+  "Composite time sort value: (DAY . WITHIN-DAY-RANK).
+Upstream orders time keys by start-of-day with a `hour IS NULL'
+tiebreak, so on the same day timed entries come before all-day ones —
+in BOTH directions: the day honours the sort direction, the rank
+always compares ascending."
+  (let* ((d (decode-time (seconds-to-time time)))
+         (day (float-time (encode-time 0 0 0 (nth 3 d) (nth 4 d) (nth 5 d)))))
+    (cons day (if has-time (- time day) 86400.0))))
+
+(defun orgzly-query--sort-value (entry key desc ctx)
+  "Comparable value of ENTRY under sort KEY toward direction DESC."
   (pcase key
     ('book (or (alist-get 'book entry) ""))
     ('title (or (alist-get 'title entry) ""))
-    ('priority (downcase (or (alist-get 'priority entry)
-                             (alist-get 'default-priority ctx))))
+    ;; Upstream tiebreaks equal priorities on `priority IS NULL', so an
+    ;; explicit priority orders before a default-equal one (and after,
+    ;; descending) — the appended rank digit flips with the string.
+    ('priority (let ((p (alist-get 'priority entry)))
+                 (concat (downcase (or p (alist-get 'default-priority ctx)))
+                         (if p "0" "1"))))
     ('state (orgzly-query--state-rank (alist-get 'state entry) ctx))
     ('position (alist-get 'pos entry))
-    ('event (let ((evs (orgzly-query--entry-events entry)))
-              (and evs (apply #'min evs))))
-    (_ (orgzly-query--entry-time entry key))))
+    ;; Upstream: MIN(event) ascending, MAX(event) descending.
+    ('event (when-let ((evs (orgzly-query--entry-events entry)))
+              (let ((pick (car (sort (copy-sequence evs)
+                                     (lambda (a b)
+                                       (if desc (> (car a) (car b))
+                                         (< (car a) (car b))))))))
+                (orgzly-query--time-sort-value (nth 0 pick) (nth 2 pick)))))
+    (_ (when-let ((ts (alist-get key entry)))
+         (orgzly-query--time-sort-value (alist-get 'time ts)
+                                        (alist-get 'has-time ts))))))
 
 (defun orgzly-query--compare (a b desc)
   "Three-way-ish compare of sort values A and B honouring DESC.
 nil sorts after everything in either direction (missing timestamps go
-last). Returns `lt', `gt', or `eq'."
+last).  Cons values are composites: the car honours DESC, the cdr is a
+direction-invariant tiebreak.  Returns `lt', `gt', or `eq'."
   (cond
    ((and (null a) (null b)) 'eq)
    ((null a) 'gt)
    ((null b) 'lt)
+   ((consp a)
+    (let ((c (orgzly-query--compare (car a) (car b) desc)))
+      (if (eq c 'eq) (orgzly-query--compare (cdr a) (cdr b) nil) c)))
    (t (let* ((lt (if (stringp a) (string-lessp a b) (< a b)))
              (gt (if (stringp a) (string-lessp b a) (> a b))))
         (cond ((and desc gt) 'lt)
@@ -438,8 +467,8 @@ conditions gets scheduled/deadline time prepended."
           (lambda (ea eb)
             (cl-loop for (key . desc) in orders
                      for c = (orgzly-query--compare
-                              (orgzly-query--sort-value ea key ctx)
-                              (orgzly-query--sort-value eb key ctx)
+                              (orgzly-query--sort-value ea key desc ctx)
+                              (orgzly-query--sort-value eb key desc ctx)
                               desc)
                      unless (eq c 'eq) return (eq c 'lt)
                      finally return nil)))))

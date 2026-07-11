@@ -242,6 +242,22 @@
     (should-not (orgzly-query-test--match "e.today" nextweek))
     (should (orgzly-query-test--match "e.ge.today" nextweek))))
 
+(ert-deftest orgzly-query-match-event-any-and-end-time ()
+  "Per-event matching (upstream's one row per event) and range ends."
+  ;; One event inside the period, one outside: matches — upstream
+  ;; matches when ANY single event satisfies the relation.
+  (let ((mixed (orgzly-query-test--entry
+                :events (list (orgzly-query-test--ts 2026 7 9 10 0)
+                              (orgzly-query-test--ts 2026 7 16))))
+        ;; Time-range event ending 16:00: ge compares the end.
+        (ranged (orgzly-query-test--entry
+                 :events (list (append (orgzly-query-test--ts 2026 7 9 10 0)
+                                       `((end-time
+                                          . ,(float-time
+                                              (encode-time 0 0 16 9 7 2026)))))))))
+    (should (orgzly-query-test--match "e.today" mixed))
+    (should (orgzly-query-test--match "e.ge.now" ranged))))
+
 ;; ─── Select + sort ───────────────────────────────────────────────────────────
 
 (ert-deftest orgzly-query-select-sorts-by-priority ()

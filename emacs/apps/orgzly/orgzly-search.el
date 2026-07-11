@@ -20,6 +20,9 @@
 (require 'orgzly-agenda)
 
 (declare-function orgzly-ui--note-row "orgzly-ui")
+(declare-function orgzly-ui--quick-row "orgzly-ui")
+(declare-function orgzly-ui--selection-bar "orgzly-ui")
+(defvar orgzly-ui--select-mode)
 
 (defcustom orgzly-saved-searches
   '(("Agenda" . ".it.done ad.7")
@@ -55,17 +58,26 @@
       (condition-case err
           (let* ((query (orgzly-query-parse q))
                  (ctx (orgzly-data-query-context)))
-            (if (plist-get query :agenda-days)
-                (orgzly-agenda-day-nodes (orgzly-data-entries) query ctx)
-              (let* ((hits (orgzly-query-select (orgzly-data-entries) query ctx))
-                     (n (length hits))
-                     (shown (seq-take hits orgzly-search--result-cap)))
-                (cons
-                 (jetpacs-section-header
-                  (format "%d result%s" n (if (= n 1) "" "s")))
-                 (mapcar (lambda (e)
-                           (orgzly-ui--note-row e :show-book t :hide-content t))
-                         shown)))))
+            (append
+             (when orgzly-ui--select-mode
+               (list (orgzly-ui--selection-bar)))
+             (if (plist-get query :agenda-days)
+                 (orgzly-agenda-day-nodes (orgzly-data-entries) query ctx)
+               (let* ((hits (orgzly-query-select (orgzly-data-entries)
+                                                 query ctx))
+                      (n (length hits))
+                      (shown (seq-take hits orgzly-search--result-cap)))
+                 (cons
+                  (jetpacs-section-header
+                   (format "%d result%s" n (if (= n 1) "" "s")))
+                  ;; Hits carry the quick popup (swipe / long-press),
+                  ;; and in select mode the rows toggle selection —
+                  ;; Orgzly's CAB over search results.
+                  (mapcar (lambda (e)
+                            (orgzly-ui--quick-row
+                             e (orgzly-ui--note-row e :show-book t
+                                                    :hide-content t)))
+                          shown))))))
         (error
          (list (jetpacs-card
                 (list (jetpacs-text (format "Query error: %s"
@@ -163,6 +175,19 @@
 (jetpacs-shell-define-view "orgzly.search"
   :builder (lambda (snackbar)
              (jetpacs-shell-tab-view "orgzly.search" (orgzly-search--body)
+                                  :top-bar
+                                  (jetpacs-shell-default-top-bar
+                                   "Search"
+                                   :extra-actions
+                                   ;; Orgzly's multi-select works on query
+                                   ;; hits too; same toggle as the book view.
+                                   (list (jetpacs-icon-button
+                                          (if orgzly-ui--select-mode
+                                              "close" "checklist")
+                                          (jetpacs-action
+                                           "orgzly.book.select-mode"
+                                           :when-offline "drop")
+                                          :content-description "Select notes")))
                                   :snackbar snackbar))
   :tab '(:icon "search" :label "Search")
   :order 12)

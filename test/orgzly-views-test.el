@@ -128,6 +128,25 @@ Bring the slides
      (orgzly-views-test--build-and-lint "orgzly.search"))
    (setq orgzly-search--query "")))
 
+(ert-deftest orgzly-views-query-hits-carry-quick-actions ()
+  "Search and agenda hits ride the swipe/long-press popup collapsible,
+and multi-select mode renders (and lints) on both query views."
+  (orgzly-views-test--with-app
+   (setq orgzly-search--query "i.todo")
+   (dolist (view '("orgzly.search" "orgzly.agenda"))
+     (let ((strings (orgzly-views-test--strings
+                     (orgzly-views-test--build-and-lint view))))
+       (should (cl-some (lambda (s)
+                          (and (stringp s) (string-prefix-p "orgzly-hit:" s)))
+                        strings))))
+   (setq orgzly-ui--select-mode t
+         orgzly-ui--selection
+         (list (orgzly-data-entry-ref (car (orgzly-data-entries "gtd")))))
+   (orgzly-views-test--build-and-lint "orgzly.search")
+   (orgzly-views-test--build-and-lint "orgzly.agenda")
+   (setq orgzly-search--query "")
+   (orgzly-ui--reset-drill-in)))
+
 (ert-deftest orgzly-views-widget-and-reminders-specs ()
   (orgzly-views-test--with-app
    (let ((views (orgzly-widget--views)))

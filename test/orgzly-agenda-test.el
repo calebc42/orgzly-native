@@ -10,11 +10,12 @@
 (defconst orgzly-agenda-test--now (encode-time 0 30 14 9 7 2026)
   "2026-07-09 Thu 14:30 local.")
 
-(defun orgzly-agenda-test--ts (y m d &optional hh mm repeater)
+(defun orgzly-agenda-test--ts (y m d &optional hh mm repeater warning)
   `((time . ,(float-time (encode-time 0 (or mm 0) (or hh 0) d m y)))
     (has-time . ,(and hh t))
     (raw . "<ts>")
-    (repeater . ,repeater)))
+    (repeater . ,repeater)
+    (warning . ,warning)))
 
 (cl-defun orgzly-agenda-test--entry (&key (book "gtd") (pos 1) (title "N")
                                           state scheduled deadline events)
@@ -153,7 +154,6 @@ unless grouping overdue scheduled notes with today is on."
          (orgzly-reminders-deadline t)
          (orgzly-reminders-event nil)
          (orgzly-reminders-daily-time "09:00")
-         (orgzly-reminders-horizon-hours 24)
          (timed (orgzly-agenda-test--entry
                  :title "timed" :state "TODO"
                  :scheduled (orgzly-agenda-test--ts 2026 7 9 16 0)))
@@ -166,25 +166,80 @@ unless grouping overdue scheduled notes with today is on."
          (done (orgzly-agenda-test--entry
                 :title "done" :pos 4 :state "DONE"
                 :scheduled (orgzly-agenda-test--ts 2026 7 9 18 0)))
+         (far (orgzly-agenda-test--entry
+               :title "far" :pos 5 :state "TODO"
+               :scheduled (orgzly-agenda-test--ts 2026 8 20 10 0)))
          (now (float-time orgzly-agenda-test--now))
          (specs (apply #'append
                        (mapcar (lambda (e)
                                  (orgzly-reminders--entry-specs
-                                  e now (* 24 3600) '("DONE")))
-                               (list timed date-only past-daily done))))
+                                  e now '("DONE")))
+                               (list timed date-only past-daily done far))))
          (titles (mapcar (lambda (s) (alist-get 'title s)) specs)))
     ;; timed → 16:00 today; date-only tomorrow → 09:00 tomorrow;
-    ;; date-only today → 09:00 already past, skipped; done → skipped.
+    ;; date-only today → 09:00 already past, skipped; done → skipped;
+    ;; and — Orgzly's model — a time weeks out is armed now, unbounded.
     (should (member "timed" titles))
     (should (member "tomorrow" titles))
     (should-not (member "today-date-only" titles))
     (should-not (member "done" titles))
+    (should (member "far" titles))
     (let ((tom (cl-find "tomorrow" specs
                         :key (lambda (s) (alist-get 'title s)) :test #'equal)))
       (should (equal (format-time-string
                       "%m-%d %H:%M"
                       (seconds-to-time (/ (alist-get 'at_ms tom) 1000)))
                      "07-10 09:00")))))
+
+(ert-deftest orgzly-reminders-warning-lead ()
+  "Deadline/event reminders fire early by the warning cookie; scheduled don't."
+  (let* ((orgzly-reminders-daily-time "09:00")
+         (now (float-time orgzly-agenda-test--now))
+         (daily (* 9 3600))
+         ;; Deadline Jul 20 with -5d warning → reminds Jul 15 09:00.
+         (at (orgzly-reminders--next-at
+              (orgzly-agenda-test--ts 2026 7 20 nil nil nil "-5d")
+              now daily t)))
+    (should (equal (format-time-string "%m-%d %H:%M" (seconds-to-time at))
+                   "07-15 09:00"))
+    ;; Unwarned classes ignore the cookie.
+    (should (equal (format-time-string
+                    "%m-%d" (seconds-to-time
+                             (orgzly-reminders--next-at
+                              (orgzly-agenda-test--ts 2026 7 20 nil nil nil "-5d")
+                              now daily nil)))
+                   "07-20"))
+    ;; A repeater steps past occurrences whose led time already passed.
+    (should (equal (format-time-string
+                    "%m-%d" (seconds-to-time
+                             (orgzly-reminders--next-at
+                              (orgzly-agenda-test--ts 2026 7 1 nil nil "+1w" "-2d")
+                              now daily t)))
+                   "07-13"))))
+
+(ert-deftest orgzly-agenda-deadline-warning-period ()
+  "A warned deadline enters the agenda early, at max(today, due - warning)."
+  (let* ((ctx (orgzly-agenda-test--ctx))
+         (query (orgzly-query-parse "ad.7"))
+         ;; Due Jul 20 (outside ad.7), -5d warning → surfaces Jul 15.
+         (warned (orgzly-agenda-test--entry
+                  :title "warned" :state "TODO"
+                  :deadline (orgzly-agenda-test--ts 2026 7 20 nil nil nil "-5d")))
+         ;; Due Jul 10, -5d warning → warning start already past: today.
+         (looming (orgzly-agenda-test--entry
+                   :title "looming" :pos 2 :state "TODO"
+                   :deadline (orgzly-agenda-test--ts 2026 7 10 nil nil nil "-5d")))
+         (items (orgzly-agenda-items (list warned looming) query ctx
+                                     orgzly-agenda-test--now)))
+    (should (equal (mapcar (lambda (it)
+                             (cons (alist-get 'title (alist-get 'entry it))
+                                   (format-time-string
+                                    "%m-%d" (seconds-to-time
+                                             (alist-get 'day it)))))
+                           items)
+                   '(("looming" . "07-09") ("warned" . "07-15"))))
+    ;; Neither is overdue — the due dates are ahead.
+    (should-not (cl-some (lambda (it) (alist-get 'overdue-days it)) items))))
 
 (provide 'orgzly-agenda-test)
 ;;; orgzly-agenda-test.el ends here

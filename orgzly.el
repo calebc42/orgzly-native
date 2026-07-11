@@ -294,21 +294,18 @@ TS nil means the entry has no such timestamp."
              ('ge (>= ts b)))))))
 
 (defun orgzly-query--events-in-relation-p (events rel interval now)
-  "Match EVENTS (a list of float times) against REL/INTERVAL at NOW.
-Mirrors upstream's use of the note's earliest event start and latest
-event end (here: min and max of EVENTS)."
+  "Match EVENTS ((START END HAS-TIME) triples) against REL/INTERVAL at NOW.
+Upstream expands one row per event, so a note matches when ANY single
+event satisfies the relation; `gt'/`ge' compare the event's end
+(event_end_timestamp), the rest its start."
   (if (eq (car interval) 'none)
       (null events)
-    (and events
-         (let ((emin (apply #'min events))
-               (emax (apply #'max events)))
-           (pcase rel
-             ('eq (and (orgzly-query--time-in-relation-p emin 'ge interval now)
-                       (orgzly-query--time-in-relation-p emax 'le interval now)))
-             ('ne (and (orgzly-query--time-in-relation-p emin 'lt interval now)
-                       (orgzly-query--time-in-relation-p emax 'gt interval now)))
-             ((or 'lt 'le) (orgzly-query--time-in-relation-p emin rel interval now))
-             ((or 'gt 'ge) (orgzly-query--time-in-relation-p emax rel interval now)))))))
+    (and (cl-some (lambda (ev)
+                    (orgzly-query--time-in-relation-p
+                     (if (memq rel '(gt ge)) (nth 1 ev) (nth 0 ev))
+                     rel interval now))
+                  events)
+         t)))
 
 ;; ─── Entry accessors ─────────────────────────────────────────────────────────
 ;;
@@ -316,15 +313,22 @@ event end (here: min and max of EVENTS)."
 ;;   book file pos level title state priority tags itags
 ;;   scheduled deadline closed created events content
 ;; Timestamp values are alists ((time . FLOAT) (has-time . BOOL)
-;; (raw . STR) (repeater . STR)); `events' is a list of those.
+;; (raw . STR) (repeater . STR) (end-time . FLOAT) (warning . STR));
+;; `events' is a list of those.
 
 (defun orgzly-query--entry-time (entry kind)
   "Float time of ENTRY's KIND timestamp, or nil."
   (alist-get 'time (alist-get kind entry)))
 
 (defun orgzly-query--entry-events (entry)
-  "List of float times of ENTRY's plain active timestamps."
-  (delq nil (mapcar (lambda (ts) (alist-get 'time ts))
+  "ENTRY's plain active timestamps as (START END HAS-TIME) triples.
+END falls back to START when the stamp has no time range — upstream's
+event_end_timestamp COALESCE."
+  (delq nil (mapcar (lambda (ts)
+                      (when-let ((start (alist-get 'time ts)))
+                        (list start
+                              (or (alist-get 'end-time ts) start)
+                              (alist-get 'has-time ts))))
                     (alist-get 'events entry))))
 
 ;; ─── Matcher ─────────────────────────────────────────────────────────────────
@@ -408,27 +412,52 @@ A nil COND matches everything."
     (or (cl-position state seq :test #'equal)
         (if state (length seq) (1+ (length seq))))))
 
-(defun orgzly-query--sort-value (entry key ctx)
-  "Comparable value of ENTRY under sort KEY."
+(defun orgzly-query--time-sort-value (time has-time)
+  "Composite time sort value: (DAY . WITHIN-DAY-RANK).
+Upstream orders time keys by start-of-day with a `hour IS NULL'
+tiebreak, so on the same day timed entries come before all-day ones —
+in BOTH directions: the day honours the sort direction, the rank
+always compares ascending."
+  (let* ((d (decode-time (seconds-to-time time)))
+         (day (float-time (encode-time 0 0 0 (nth 3 d) (nth 4 d) (nth 5 d)))))
+    (cons day (if has-time (- time day) 86400.0))))
+
+(defun orgzly-query--sort-value (entry key desc ctx)
+  "Comparable value of ENTRY under sort KEY toward direction DESC."
   (pcase key
     ('book (or (alist-get 'book entry) ""))
     ('title (or (alist-get 'title entry) ""))
-    ('priority (downcase (or (alist-get 'priority entry)
-                             (alist-get 'default-priority ctx))))
+    ;; Upstream tiebreaks equal priorities on `priority IS NULL', so an
+    ;; explicit priority orders before a default-equal one (and after,
+    ;; descending) — the appended rank digit flips with the string.
+    ('priority (let ((p (alist-get 'priority entry)))
+                 (concat (downcase (or p (alist-get 'default-priority ctx)))
+                         (if p "0" "1"))))
     ('state (orgzly-query--state-rank (alist-get 'state entry) ctx))
     ('position (alist-get 'pos entry))
-    ('event (let ((evs (orgzly-query--entry-events entry)))
-              (and evs (apply #'min evs))))
-    (_ (orgzly-query--entry-time entry key))))
+    ;; Upstream: MIN(event) ascending, MAX(event) descending.
+    ('event (when-let ((evs (orgzly-query--entry-events entry)))
+              (let ((pick (car (sort (copy-sequence evs)
+                                     (lambda (a b)
+                                       (if desc (> (car a) (car b))
+                                         (< (car a) (car b))))))))
+                (orgzly-query--time-sort-value (nth 0 pick) (nth 2 pick)))))
+    (_ (when-let ((ts (alist-get key entry)))
+         (orgzly-query--time-sort-value (alist-get 'time ts)
+                                        (alist-get 'has-time ts))))))
 
 (defun orgzly-query--compare (a b desc)
   "Three-way-ish compare of sort values A and B honouring DESC.
 nil sorts after everything in either direction (missing timestamps go
-last). Returns `lt', `gt', or `eq'."
+last).  Cons values are composites: the car honours DESC, the cdr is a
+direction-invariant tiebreak.  Returns `lt', `gt', or `eq'."
   (cond
    ((and (null a) (null b)) 'eq)
    ((null a) 'gt)
    ((null b) 'lt)
+   ((consp a)
+    (let ((c (orgzly-query--compare (car a) (car b) desc)))
+      (if (eq c 'eq) (orgzly-query--compare (cdr a) (cdr b) nil) c)))
    (t (let* ((lt (if (stringp a) (string-lessp a b) (< a b)))
              (gt (if (stringp a) (string-lessp b a) (> a b))))
         (cond ((and desc gt) 'lt)
@@ -455,8 +484,8 @@ conditions gets scheduled/deadline time prepended."
           (lambda (ea eb)
             (cl-loop for (key . desc) in orders
                      for c = (orgzly-query--compare
-                              (orgzly-query--sort-value ea key ctx)
-                              (orgzly-query--sort-value eb key ctx)
+                              (orgzly-query--sort-value ea key desc ctx)
+                              (orgzly-query--sort-value eb key desc ctx)
                               desc)
                      unless (eq c 'eq) return (eq c 'lt)
                      finally return nil)))))
@@ -771,18 +800,38 @@ An alist:
   (clrhash orgzly-data--cache))
 
 (defun orgzly-data--parse-ts (raw)
-  "Parse org timestamp string RAW into the TS alist, or nil."
+  "Parse org timestamp string RAW into the TS alist, or nil.
+Besides the start time, captures every cookie Orgzly round-trips:
+the end of a time range (`10:00-12:00' → `end-time'), the repeater,
+and the warning/delay cookie (`-2d' on DEADLINE, `-2d'/`--2d' on
+SCHEDULED → `warning')."
   (when (and (stringp raw) (not (string-empty-p raw)))
     (condition-case nil
         (let* ((time (org-time-string-to-time raw))
                (has-time (and (string-match "[0-9]\\{1,2\\}:[0-9]\\{2\\}" raw) t))
+               (end-hhmm (and (string-match
+                               "[0-9]\\{1,2\\}:[0-9]\\{2\\}-\\([0-9]\\{1,2\\}\\):\\([0-9]\\{2\\}\\)"
+                               raw)
+                              (cons (string-to-number (match-string 1 raw))
+                                    (string-to-number (match-string 2 raw)))))
                (repeater (and (string-match
                                "\\([.+]?\\+[0-9]+[hdwmy]\\)" raw)
-                              (match-string 1 raw))))
+                              (match-string 1 raw)))
+               ;; `-N[u]' never collides with dates or times: those
+               ;; follow their digits with `-', `:' or space, not a
+               ;; repeater unit letter.
+               (warning (and (string-match "\\(--?[0-9]+[hdwmy]\\)" raw)
+                             (match-string 1 raw))))
           `((time . ,(float-time time))
             (has-time . ,has-time)
             (raw . ,raw)
-            (repeater . ,repeater)))
+            (repeater . ,repeater)
+            ,@(when end-hhmm
+                (let ((d (decode-time time)))
+                  `((end-time . ,(float-time
+                                  (encode-time 0 (cdr end-hhmm) (car end-hhmm)
+                                               (nth 3 d) (nth 4 d) (nth 5 d)))))))
+            ,@(when warning `((warning . ,warning)))))
       (error nil))))
 
 (defun orgzly-data--entry-at-point (book file)
@@ -993,15 +1042,45 @@ searching the file for it."
   (orgzly-data--with-ref ref
     (org-edit-headline title)))
 
-(defun orgzly-data-set-planning (ref kind value)
-  "Set REF's planning KIND (`scheduled' or `deadline') to VALUE.
-VALUE is an org date/time string (\"2026-07-10\", \"2026-07-10 14:00\",
-optionally with a trailing repeater like \"+1w\"), or nil to remove."
+(defun orgzly-data--format-ts (parts)
+  "Canonical active timestamp assembled from the PARTS alist.
+PARTS holds strings under `date' (required, \"2026-07-20\"), `time'
+(\"14:00\"), `end' (\"15:30\", only with time), `repeater' (\"+1w\"),
+`warning' (\"-2d\")."
+  (let* ((date (alist-get 'date parts))
+         (time (alist-get 'time parts))
+         (end (alist-get 'end parts))
+         (day (encode-time 0 0 0
+                           (string-to-number (substring date 8 10))
+                           (string-to-number (substring date 5 7))
+                           (string-to-number (substring date 0 4)))))
+    (concat "<" (format-time-string "%Y-%m-%d %a" day)
+            (and time (concat " " time (and end (concat "-" end))))
+            (when-let ((r (alist-get 'repeater parts))) (concat " " r))
+            (when-let ((w (alist-get 'warning parts))) (concat " " w))
+            ">")))
+
+(defun orgzly-data-set-planning (ref kind parts)
+  "Set REF's planning KIND (`scheduled' or `deadline') from PARTS.
+PARTS is nil to remove the entry, or an alist for
+`orgzly-data--format-ts'.  `org-schedule'/`org-deadline' manage the
+planning line's placement and removal, but they drop trailing
+repeater/warning cookies from their TIME argument (and would lose an
+end time passed alongside them) — so the stamp they insert is
+rewritten whole from PARTS."
   (orgzly-data--with-ref ref
-    (let ((fn (if (eq kind 'deadline) #'org-deadline #'org-schedule)))
-      (if (or (null value) (string-empty-p value))
+    (let ((fn (if (eq kind 'deadline) #'org-deadline #'org-schedule))
+          (date (alist-get 'date parts)))
+      (if (null date)
           (funcall fn '(4))
-        (funcall fn nil value)))))
+        (funcall fn nil date)
+        (org-back-to-heading t)
+        (let ((bound (line-end-position 2))
+              (re (concat (if (eq kind 'deadline)
+                              org-deadline-string org-scheduled-string)
+                          "[ \t]*\\(<[^>\n]+>\\)")))
+          (when (re-search-forward re bound t)
+            (replace-match (orgzly-data--format-ts parts) t t nil 1)))))))
 
 (defun orgzly-data-set-content (ref content)
   "Replace REF's content (text between metadata and next heading)."
@@ -1058,6 +1137,50 @@ optionally with a trailing repeater like \"+1w\"), or nil to remove."
   (let ((buf (orgzly-data--goto-ref ref)))
     (with-current-buffer buf
       (save-excursion (org-copy-subtree)))))
+
+(defun orgzly-data--refs-in-order (refs)
+  "REFS sorted into document order (file, then position)."
+  (sort (copy-sequence refs)
+        (lambda (a b)
+          (let ((fa (alist-get 'file a)) (fb (alist-get 'file b)))
+            (if (equal fa fb)
+                (< (alist-get 'pos a) (alist-get 'pos b))
+              (string-lessp fa fb))))))
+
+(defun orgzly-data--subtree-text (&optional delete)
+  "Text of the subtree at point, re-rooted to level 1; DELETE cuts it.
+Re-rooting keeps a multi-selection paste-able as one block:
+`org-paste-subtree' accepts a set of trees only when none sits above
+the first."
+  (org-back-to-heading t)
+  (let* ((level (org-current-level))
+         (beg (point))
+         (end (progn (org-end-of-subtree t t) (point)))
+         (text (buffer-substring-no-properties beg end)))
+    (when delete (delete-region beg end))
+    (unless (string-suffix-p "\n" text) (setq text (concat text "\n")))
+    (if (<= level 1)
+        text
+      (replace-regexp-in-string
+       (format "^\\*\\{%d\\}\\(\\*+ \\)" (1- level)) "\\1" text))))
+
+(defun orgzly-data-cut-notes (refs)
+  "Cut REFS' subtrees as one document-ordered clipboard block.
+Extraction runs bottom-up so earlier positions stay valid; a single
+paste restores all of them (Orgzly's batch cut)."
+  (let (texts)
+    (dolist (ref (reverse (orgzly-data--refs-in-order refs)))
+      (push (orgzly-data--with-ref ref
+              (orgzly-data--subtree-text t))
+            texts))
+    (kill-new (string-join texts ""))))
+
+(defun orgzly-data-copy-notes (refs)
+  "Copy REFS' subtrees as one document-ordered clipboard block."
+  (kill-new (mapconcat (lambda (ref)
+                         (with-current-buffer (orgzly-data--goto-ref ref)
+                           (save-excursion (orgzly-data--subtree-text))))
+                       (orgzly-data--refs-in-order refs) "")))
 
 (defun orgzly-data-paste-note (book &optional ref)
   "Paste the clipboard subtree into BOOK, after REF or at the end."
@@ -1123,14 +1246,17 @@ through `org-todo' (a repeating task reschedules instead of closing)."
                     (or (cadr kws) "DONE")))))))
 
 (cl-defun orgzly-data-new-note (book title &key state priority tags
-                                     scheduled deadline content under)
+                                     scheduled deadline content under
+                                     sibling before)
   "Create a note in BOOK titled TITLE; returns its ref.
 STATE/PRIORITY/TAGS/SCHEDULED/DEADLINE/CONTENT seed the metadata
 (strings; SCHEDULED/DEADLINE are org date strings).  UNDER, when
-non-nil, is a parent ref the note is created beneath; otherwise the
-note is a top-level heading appended to the book (or prepended, per
-`orgzly-new-note-prepend').  Defaults honour the Orzgly new-note
-settings (`orgzly-new-note-state', created-at property)."
+non-nil, is a parent ref the note is created beneath; SIBLING a ref
+the note is created next to at the same level — after its subtree, or
+directly above it when BEFORE (Orgzly's new above/under/below).
+Otherwise the note is a top-level heading appended to the book (or
+prepended, per `orgzly-new-note-prepend').  Defaults honour the Orzgly
+new-note settings (`orgzly-new-note-state', created-at property)."
   (let ((file (orgzly-data-book-file book))
         (state (or state orgzly-new-note-state)))
     (unless (file-exists-p file) (orgzly-data-create-book book))
@@ -1143,6 +1269,13 @@ settings (`orgzly-new-note-state', created-at property)."
            (org-back-to-heading t)
            (setq level (1+ (org-current-level)))
            (org-end-of-subtree t t))
+          (sibling
+           (goto-char (alist-get 'pos sibling))
+           (org-back-to-heading t)
+           (setq level (org-current-level))
+           (unless before
+             (org-end-of-subtree t t)
+             (unless (bolp) (insert "\n"))))
           (orgzly-new-note-prepend
            (goto-char (point-min))
            (if (re-search-forward org-outline-regexp-bol nil t)
@@ -1447,7 +1580,9 @@ selection in multi-select mode)."
 (defconst orgzly-ui--quick-ops
   '(("state"       "State"       "flag"                "orgzly.note.pick-state")
     ("toggle-done" "Done"        "check_circle"        "orgzly.note.toggle-done")
+    ("new-above"   "New above"   "vertical_align_top"  "orgzly.note.new-above")
     ("new-under"   "New under"   "playlist_add"        "orgzly.note.new-under")
+    ("new-below"   "New below"   "vertical_align_bottom" "orgzly.note.new-below")
     ("refile"      "Refile"      "move_to_inbox"       "orgzly.note.refile")
     ("archive"     "Archive"     "archive"             "orgzly.note.archive")
     ("cut"         "Cut"         "content_cut"         "orgzly.note.cut")
@@ -1484,7 +1619,9 @@ selection in multi-select mode)."
       (funcall btn "toggle-done"))
      (jetpacs-divider)
      (apply #'jetpacs-flow-row
-            (mapcar btn '("new-under" "refile" "archive")))
+            (mapcar btn '("new-above" "new-under" "new-below")))
+     (apply #'jetpacs-flow-row
+            (mapcar btn '("refile" "archive")))
      (jetpacs-divider)
      (apply #'jetpacs-flow-row
             (mapcar btn '("cut" "copy" "paste" "delete"))))))
@@ -1626,8 +1763,26 @@ fold on-device, and swipe or long-press opens the quick-action popup."
      :on-long-tap quick
      :on-swipe quick)))
 
+(defun orgzly-ui--quick-row (entry header)
+  "HEADER wrapped so swipe or long-press opens ENTRY's quick popup.
+Search and agenda hits ride the same collapsible furniture as the book
+outline (a leaf's static chevron) — that's where the swipe and
+long-press gestures live, so query results get Orgzly's popup ops
+without new core primitives."
+  (let ((quick (jetpacs-action "orgzly.note.quick"
+                            :args (orgzly-data-entry-ref entry)
+                            :when-offline "drop")))
+    (jetpacs-collapsible
+     (format "orgzly-hit:%s:%s" (alist-get 'file entry) (alist-get 'pos entry))
+     header nil
+     :collapsed t
+     :on-long-tap quick
+     :on-swipe quick)))
+
 (defun orgzly-ui--selection-bar ()
-  "Orgzly's multi-select action bar, shown while selecting."
+  "Orgzly's multi-select action bar, shown while selecting.
+Second row: the structure ops of upstream's \"move\" CAB submode, plus
+batch cut/copy."
   (jetpacs-surface
    (list
     (jetpacs-scroll-row
@@ -1646,7 +1801,22 @@ fold on-device, and swipe or long-press opens the quick-action popup."
      (jetpacs-button "Archive" (jetpacs-action "orgzly.bulk.archive")
                   :variant "text" :icon "archive")
      (jetpacs-button "Delete" (jetpacs-action "orgzly.bulk.delete")
-                  :variant "text" :icon "delete")))
+                  :variant "text" :icon "delete"))
+    (jetpacs-scroll-row
+     (jetpacs-button "Promote" (jetpacs-action "orgzly.bulk.promote")
+                  :variant "text" :icon "chevron_left")
+     (jetpacs-button "Demote" (jetpacs-action "orgzly.bulk.demote")
+                  :variant "text" :icon "chevron_right")
+     (jetpacs-button "Up" (jetpacs-action "orgzly.bulk.move"
+                                    :args '((dir . "up")))
+                  :variant "text" :icon "arrow_upward")
+     (jetpacs-button "Down" (jetpacs-action "orgzly.bulk.move"
+                                      :args '((dir . "down")))
+                  :variant "text" :icon "arrow_downward")
+     (jetpacs-button "Cut" (jetpacs-action "orgzly.bulk.cut")
+                  :variant "text" :icon "content_cut")
+     (jetpacs-button "Copy" (jetpacs-action "orgzly.bulk.copy")
+                  :variant "text" :icon "content_copy")))
    :color "surface_container" :shape "rounded" :padding 4 :fill t))
 
 (defun orgzly-ui--preface-node (book)
@@ -1930,21 +2100,42 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
 ;; ─── Timestamp dialog (Orgzly's dialog_timestamp) ────────────────────────────
 
 (defun orgzly-ui--plan-parts (ref kind)
-  "Current (DATE TIME REPEATER) strings of REF's KIND planning, or nils."
+  "REF's KIND planning as a parts alist (`orgzly-data-set-planning').
+String values under `date', `time', `end', `repeater', `warning';
+absent when unset."
   (let* ((entry (orgzly-ui--entry-for-ref ref))
          (ts (and entry (alist-get (intern kind) entry)))
-         (time (and ts (alist-get 'time ts))))
-    (list (and time (format-time-string "%Y-%m-%d" (seconds-to-time time)))
-          (and ts (alist-get 'has-time ts)
-               (format-time-string "%H:%M" (seconds-to-time time)))
-          (and ts (alist-get 'repeater ts)))))
+         (time (and ts (alist-get 'time ts)))
+         (end (and ts (alist-get 'end-time ts)))
+         (repeater (and ts (alist-get 'repeater ts)))
+         (warning (and ts (alist-get 'warning ts))))
+    (delq nil
+          (list (and time (cons 'date (format-time-string
+                                       "%Y-%m-%d" (seconds-to-time time))))
+                (and time (alist-get 'has-time ts)
+                     (cons 'time (format-time-string
+                                  "%H:%M" (seconds-to-time time))))
+                (and end (cons 'end (format-time-string
+                                     "%H:%M" (seconds-to-time end))))
+                (and repeater (cons 'repeater repeater))
+                (and warning (cons 'warning warning))))))
 
 (defun orgzly-ui--plan-dialog (ref kind)
-  "The timestamp dialog spec for REF's KIND planning line."
+  "The timestamp dialog spec for REF's KIND planning line.
+Orgzly's dialog_timestamp: date, time with an end time (range) once a
+time is set, repeater, and the warning/delay cookie; × drops just the
+time (keeping the date) or just the end."
   (let* ((parts (orgzly-ui--plan-parts ref kind))
+         (date (alist-get 'date parts))
+         (time (alist-get 'time parts))
+         (end (alist-get 'end parts))
          (args (lambda (&rest extra)
                  (append ref (cons (cons 'kind kind) extra)))))
-    (jetpacs-lazy-column
+    (apply
+     #'jetpacs-lazy-column
+     (delq
+      nil
+      (list
      (jetpacs-row
       (jetpacs-box
        (list (jetpacs-text (if (equal kind "deadline")
@@ -1953,19 +2144,52 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
        :weight 1.0)
       (jetpacs-button "Done" (jetpacs-action "dialog.dismiss") :variant "text")
       :align "center")
+     (apply
+      #'jetpacs-row
+      (append
+       (delq nil
+             (list
+              (jetpacs-icon (if (equal kind "deadline") "alarm" "today")
+                         :size 20 :color "outline")
+              (jetpacs-date-button (or date "Date")
+                                (jetpacs-action "orgzly.note.plan-date"
+                                             :args (funcall args '(dialog . t)))
+                                :value date)
+              (jetpacs-time-button (or time "Time")
+                                (jetpacs-action "orgzly.note.plan-time"
+                                             :args (funcall args '(dialog . t)))
+                                :value time)
+              (when time
+                (jetpacs-icon-button "close"
+                                  (jetpacs-action "orgzly.note.plan-drop-time"
+                                               :args (funcall args '(dialog . t)))
+                                  :content-description "Remove time"))))
+       '(:spacing 8 :align "center")))
+     (when time
+       (apply
+        #'jetpacs-row
+        (append
+         (delq nil
+               (list
+                (jetpacs-icon "schedule" :size 20 :color "outline")
+                (jetpacs-time-button (or end "End time")
+                                  (jetpacs-action "orgzly.note.plan-end"
+                                               :args (funcall args '(dialog . t)))
+                                  :value end)
+                (when end
+                  (jetpacs-icon-button "close"
+                                    (jetpacs-action "orgzly.note.plan-drop-end"
+                                                 :args (funcall args '(dialog . t)))
+                                    :content-description "Remove end time"))))
+         '(:spacing 8 :align "center"))))
      (jetpacs-row
-      (jetpacs-icon (if (equal kind "deadline") "alarm" "today")
-                 :size 20 :color "outline")
-      (jetpacs-date-button (or (nth 0 parts) "Date")
-                        (jetpacs-action "orgzly.note.plan-date"
-                                     :args (funcall args '(dialog . t)))
-                        :value (nth 0 parts))
-      (jetpacs-time-button (or (nth 1 parts) "Time")
-                        (jetpacs-action "orgzly.note.plan-time"
-                                     :args (funcall args '(dialog . t)))
-                        :value (nth 1 parts))
-      (jetpacs-button (or (nth 2 parts) "Repeat")
+      (jetpacs-icon "repeat" :size 20 :color "outline")
+      (jetpacs-button (or (alist-get 'repeater parts) "Repeat")
                    (jetpacs-action "orgzly.note.plan-repeater"
+                                :args (funcall args '(dialog . t)))
+                   :variant "text")
+      (jetpacs-button (or (alist-get 'warning parts) "Warning")
+                   (jetpacs-action "orgzly.note.plan-warning"
                                 :args (funcall args '(dialog . t)))
                    :variant "text")
       :spacing 8 :align "center")
@@ -1974,7 +2198,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
       (jetpacs-button "Clear"
                    (jetpacs-action "orgzly.note.plan-clear"
                                 :args (funcall args))
-                   :variant "text" :icon "close")))))
+                   :variant "text" :icon "close")))))))
 
 (jetpacs-defaction "orgzly.note.plan-dialog"
   (lambda (args _)
@@ -2204,6 +2428,24 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
           (jetpacs-shell-notify "Note created")
           (jetpacs-shell-push nil :switch-to "orgzly.note"))))))
 
+(defun orgzly-ui--new-sibling (args before)
+  "Create a same-level sibling of the note in ARGS (above when BEFORE)."
+  (let* ((sib (orgzly-ui--args-ref args))
+         (book (orgzly-data-book-name (alist-get 'file sib)))
+         (title (string-trim (read-string "Note title: "))))
+    (unless (string-empty-p title)
+      (let ((ref (orgzly-data-new-note book title
+                                       :sibling sib :before before)))
+        (setq orgzly-ui--note-ref ref)
+        (jetpacs-shell-notify "Note created")
+        (jetpacs-shell-push nil :switch-to "orgzly.note")))))
+
+(jetpacs-defaction "orgzly.note.new-above"
+  (lambda (args _) (orgzly-ui--new-sibling args t)))
+
+(jetpacs-defaction "orgzly.note.new-below"
+  (lambda (args _) (orgzly-ui--new-sibling args nil)))
+
 (jetpacs-defaction "orgzly.note.rename"
   ;; From the editor's inline title field (args carry `value') or a
   ;; bridged prompt.
@@ -2272,53 +2514,78 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
 ;; prompt.  Actions carrying (dialog . t) re-show the dialog with the
 ;; updated values, so it edits in place like Orgzly's.
 
-(defun orgzly-ui--plan-apply (ref kind date time repeater &optional dialog)
-  "Write the planning string assembled from DATE/TIME/REPEATER onto REF."
-  (orgzly-data-set-planning
-   ref (intern kind)
-   (and date (string-join (delq nil (list date time repeater)) " ")))
+(defun orgzly-ui--plan-apply (ref kind parts &optional dialog)
+  "Write the PARTS alist onto REF's KIND planning; nil PARTS removes."
+  (orgzly-data-set-planning ref (intern kind)
+                            (and (alist-get 'date parts) parts))
   (when dialog
     (jetpacs-send-dialog (orgzly-ui--plan-dialog ref kind)))
   (orgzly-ui--after-mutation nil))
 
+(defun orgzly-ui--plan-update (args field value)
+  "Re-apply the planning in ARGS with FIELD set to VALUE (nil removes)."
+  (let* ((ref (orgzly-ui--args-ref args))
+         (kind (alist-get 'kind args))
+         (parts (assq-delete-all field (orgzly-ui--plan-parts ref kind))))
+    (when value (push (cons field value) parts))
+    ;; An end time only makes sense on a timed stamp, and any edit
+    ;; before a date exists implies today (Orgzly's dialog defaults).
+    (unless (alist-get 'time parts)
+      (setq parts (assq-delete-all 'end parts)))
+    (unless (alist-get 'date parts)
+      (push (cons 'date (format-time-string "%Y-%m-%d")) parts))
+    (orgzly-ui--plan-apply ref kind parts (alist-get 'dialog args))))
+
 (jetpacs-defaction "orgzly.note.plan-date"
   (lambda (args _)
-    (let* ((ref (orgzly-ui--args-ref args))
-           (kind (alist-get 'kind args))
-           (parts (orgzly-ui--plan-parts ref kind)))
-      (orgzly-ui--plan-apply ref kind (alist-get 'value args)
-                             (nth 1 parts) (nth 2 parts)
-                             (alist-get 'dialog args)))))
+    (orgzly-ui--plan-update args 'date (alist-get 'value args))))
 
 (jetpacs-defaction "orgzly.note.plan-time"
   (lambda (args _)
-    (let* ((ref (orgzly-ui--args-ref args))
-           (kind (alist-get 'kind args))
-           (parts (orgzly-ui--plan-parts ref kind))
-           (date (or (nth 0 parts) (format-time-string "%Y-%m-%d"))))
-      (orgzly-ui--plan-apply ref kind date (alist-get 'value args)
-                             (nth 2 parts)
-                             (alist-get 'dialog args)))))
+    (orgzly-ui--plan-update args 'time (alist-get 'value args))))
+
+(jetpacs-defaction "orgzly.note.plan-end"
+  (lambda (args _)
+    (orgzly-ui--plan-update args 'end (alist-get 'value args))))
+
+(jetpacs-defaction "orgzly.note.plan-drop-time"
+  (lambda (args _)
+    (orgzly-ui--plan-update args 'time nil)))
+
+(jetpacs-defaction "orgzly.note.plan-drop-end"
+  (lambda (args _)
+    (orgzly-ui--plan-update args 'end nil)))
 
 (jetpacs-defaction "orgzly.note.plan-repeater"
   (lambda (args _)
-    (let* ((ref (orgzly-ui--args-ref args))
-           (kind (alist-get 'kind args))
-           (parts (orgzly-ui--plan-parts ref kind))
-           (rep (string-trim
-                 (read-string "Repeater (+1w, ++1m, .+2d; empty to clear): "
-                              (or (nth 2 parts) "")))))
-      (orgzly-ui--plan-apply ref kind
-                             (or (nth 0 parts) (format-time-string "%Y-%m-%d"))
-                             (nth 1 parts)
-                             (unless (string-empty-p rep) rep)
-                             (alist-get 'dialog args)))))
+    (let ((rep (string-trim
+                (read-string "Repeater (+1w, ++1m, .+2d; empty to clear): "
+                             (or (alist-get 'repeater
+                                            (orgzly-ui--plan-parts
+                                             (orgzly-ui--args-ref args)
+                                             (alist-get 'kind args)))
+                                 "")))))
+      (orgzly-ui--plan-update args 'repeater
+                              (unless (string-empty-p rep) rep)))))
+
+(jetpacs-defaction "orgzly.note.plan-warning"
+  (lambda (args _)
+    (let ((warn (string-trim
+                 (read-string
+                  "Warning/delay (-2d; --2d first-only; empty to clear): "
+                  (or (alist-get 'warning
+                                 (orgzly-ui--plan-parts
+                                  (orgzly-ui--args-ref args)
+                                  (alist-get 'kind args)))
+                      "")))))
+      (orgzly-ui--plan-update args 'warning
+                              (unless (string-empty-p warn) warn)))))
 
 (jetpacs-defaction "orgzly.note.plan-clear"
   (lambda (args _)
     (jetpacs-dismiss-dialog)
     (orgzly-ui--plan-apply (orgzly-ui--args-ref args) (alist-get 'kind args)
-                           nil nil nil)))
+                           nil)))
 
 ;; Properties.
 
@@ -2436,8 +2703,25 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
     (if (null refs)
         (jetpacs-shell-notify "Nothing selected")
       (dolist (ref refs) (funcall fn ref))
-      (unless keep-selection
-        (setq orgzly-ui--selection nil orgzly-ui--select-mode nil))
+      (if (not keep-selection)
+          (setq orgzly-ui--selection nil orgzly-ui--select-mode nil)
+        ;; Mutations shift positions; re-anchor the kept selection on
+        ;; the fresh scan so the checkboxes stay lit (mutations already
+        ;; re-resolve drifted refs by title).
+        (let ((entries (orgzly-data-entries)))
+          (setq orgzly-ui--selection
+                (delq nil
+                      (mapcar
+                       (lambda (ref)
+                         (when-let ((e (cl-find-if
+                                        (lambda (e)
+                                          (and (equal (alist-get 'file e)
+                                                      (alist-get 'file ref))
+                                               (equal (alist-get 'title e)
+                                                      (alist-get 'title ref))))
+                                        entries)))
+                           (orgzly-data-entry-ref e)))
+                       refs)))))
       (when message
         (jetpacs-shell-notify (format "%s (%d notes)" message (length refs))))))
   (jetpacs-shell-push))
@@ -2457,11 +2741,61 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
   (lambda (_ _)
     (orgzly-ui--bulk #'orgzly-data-toggle-done "Toggled" t)))
 
+(jetpacs-defaction "orgzly.bulk.promote"
+  ;; ignore-errors: a top-level note can't promote; skip it, don't
+  ;; abort the batch.
+  (lambda (_ _)
+    (orgzly-ui--bulk (lambda (ref) (ignore-errors (orgzly-data-promote ref)))
+                     "Promoted" t)))
+
+(jetpacs-defaction "orgzly.bulk.demote"
+  (lambda (_ _)
+    (orgzly-ui--bulk (lambda (ref) (ignore-errors (orgzly-data-demote ref)))
+                     "Demoted" t)))
+
+(jetpacs-defaction "orgzly.bulk.move"
+  ;; Top-first going up, bottom-first going down, so a run of selected
+  ;; siblings keeps its relative order (upstream's moving CAB);
+  ;; ignore-errors skips the note already at the edge.
+  (lambda (args _)
+    (let ((up (equal (alist-get 'dir args) "up"))
+          (ordered (orgzly-data--refs-in-order orgzly-ui--selection)))
+      (setq orgzly-ui--selection (if up ordered (reverse ordered)))
+      (orgzly-ui--bulk (lambda (ref)
+                         (ignore-errors
+                           (if up (orgzly-data-move-up ref)
+                             (orgzly-data-move-down ref))))
+                       (if up "Moved up" "Moved down") t))))
+
+(jetpacs-defaction "orgzly.bulk.cut"
+  (lambda (_ _)
+    (let ((refs orgzly-ui--selection))
+      (if (null refs)
+          (jetpacs-shell-notify "Nothing selected")
+        (orgzly-data-cut-notes refs)
+        (setq orgzly-ui--selection nil orgzly-ui--select-mode nil)
+        (jetpacs-shell-notify (format "Cut %d note%s" (length refs)
+                                   (if (= (length refs) 1) "" "s"))))
+      (jetpacs-shell-push))))
+
+(jetpacs-defaction "orgzly.bulk.copy"
+  (lambda (_ _)
+    (let ((refs orgzly-ui--selection))
+      (if (null refs)
+          (jetpacs-shell-notify "Nothing selected")
+        (orgzly-data-copy-notes refs)
+        (setq orgzly-ui--selection nil orgzly-ui--select-mode nil)
+        (jetpacs-shell-notify (format "Copied %d note%s" (length refs)
+                                   (if (= (length refs) 1) "" "s"))))
+      (jetpacs-shell-push))))
+
 (jetpacs-defaction "orgzly.bulk.plan"
   (lambda (args _)
     (let ((kind (intern (alist-get 'kind args)))
           (date (alist-get 'value args)))
-      (orgzly-ui--bulk (lambda (ref) (orgzly-data-set-planning ref kind date))
+      (orgzly-ui--bulk (lambda (ref)
+                         (orgzly-data-set-planning ref kind
+                                                   `((date . ,date))))
                        (format "%s → %s" (capitalize (symbol-name kind)) date)
                        t))))
 
@@ -2518,6 +2852,9 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
 
 (declare-function orgzly-ui--note-row "orgzly-ui")
 (declare-function orgzly-ui--icon-line "orgzly-ui")
+(declare-function orgzly-ui--quick-row "orgzly-ui")
+(declare-function orgzly-ui--selection-bar "orgzly-ui")
+(defvar orgzly-ui--select-mode)
 
 (defconst orgzly-agenda--meta-color "#8a8a8a")
 
@@ -2536,6 +2873,14 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
     (cons (pcase (match-string 2 repeater)
             ("h" 'hour) ("d" 'day) ("w" 'week) ("m" 'month) ("y" 'year))
           (string-to-number (match-string 1 repeater)))))
+
+(defun orgzly-agenda--parse-warning (warning)
+  "Parse WARNING (\"-2d\", \"--3w\") into (UNIT . VALUE), or nil."
+  (when (and (stringp warning)
+             (string-match "\\`--?\\([0-9]+\\)\\([hdwmy]\\)\\'" warning))
+    (cons (pcase (match-string 2 warning)
+            ("h" 'hour) ("d" 'day) ("w" 'week) ("m" 'month) ("y" 'year))
+          (string-to-number (match-string 1 warning)))))
 
 (defun orgzly-agenda--step (time unit value)
   "TIME advanced by VALUE UNITs, calendar-aware for months and years."
@@ -2592,18 +2937,35 @@ collapse into today."
       (let ((done (member (alist-get 'state entry) (alist-get 'done ctx))))
         (dolist (kind '(scheduled deadline))
           (when-let ((ts (alist-get kind entry)))
-            (dolist (occ (orgzly-agenda--occurrences
-                          ts window-start window-end done))
-              (let* ((overdue (< occ window-start))
-                     (day (if overdue window-start
-                            (orgzly-agenda--day-start
-                             0 (seconds-to-time occ)))))
-                (push `((day . ,day) (time . ,occ) (kind . ,kind)
-                        (overdue-days
-                         . ,(when overdue
-                              (max 1 (floor (/ (- window-start occ) 86400)))))
-                        (entry . ,entry))
-                      items)))))
+            ;; A deadline with a warning cookie surfaces `warning'
+            ;; early (Orgzly applies warningPeriod to deadlines only):
+            ;; widen the expansion window so a due date beyond it still
+            ;; yields its early occurrence, then bucket each occurrence
+            ;; at max(today, due - warning).
+            (let* ((warn (and (eq kind 'deadline)
+                              (orgzly-agenda--parse-warning
+                               (alist-get 'warning ts))))
+                   (end (if warn (orgzly-agenda--step
+                                  window-end (car warn) (cdr warn))
+                          window-end)))
+              (dolist (occ (orgzly-agenda--occurrences
+                            ts window-start end done))
+                (let* ((occ (if (and warn (>= occ window-start))
+                                (max window-start
+                                     (orgzly-agenda--step
+                                      occ (car warn) (- (cdr warn))))
+                              occ))
+                       (overdue (< occ window-start))
+                       (day (if overdue window-start
+                              (orgzly-agenda--day-start
+                               0 (seconds-to-time occ)))))
+                  (push `((day . ,day) (time . ,occ) (kind . ,kind)
+                          (overdue-days
+                           . ,(when overdue
+                                (max 1 (floor (/ (- window-start occ)
+                                                 86400)))))
+                          (entry . ,entry))
+                        items))))))
         (dolist (ts (alist-get 'events entry))
           (dolist (occ (orgzly-agenda--occurrences ts window-start window-end t))
             (push `((day . ,(orgzly-agenda--day-start 0 (seconds-to-time occ)))
@@ -2666,23 +3028,26 @@ today — except overdue scheduled ones when
 
 (defun orgzly-agenda--item-row (item)
   "One agenda item as the standard Orgzly note row.
-Only the planning time responsible for the item's presence shows, and
-an overdue item carries how late it is in red."
+Only the planning time responsible for the item's presence shows, an
+overdue item carries how late it is in red, and — as on the notebook
+outline — swipe or long-press opens the quick-action popup."
   (let* ((entry (alist-get 'entry item))
          (kind (alist-get 'kind item))
          (overdue (alist-get 'overdue-days item))
          (row (orgzly-ui--note-row entry :show-book t :only-kind kind
                                    :hide-content t)))
-    (if (null overdue)
+    (orgzly-ui--quick-row
+     entry
+     (if (null overdue)
+         row
+       (jetpacs-column
         row
-      (jetpacs-column
-       row
-       (jetpacs-row
-        (jetpacs-spacer :width 4)
-        (orgzly-ui--icon-line "history"
-                              (format "%d day%s overdue" overdue
-                                      (if (= overdue 1) "" "s"))
-                              "#e53935"))))))
+        (jetpacs-row
+         (jetpacs-spacer :width 4)
+         (orgzly-ui--icon-line "history"
+                               (format "%d day%s overdue" overdue
+                                       (if (= overdue 1) "" "s"))
+                               "#e53935")))))))
 
 (defun orgzly-agenda--empty-day-node ()
   (jetpacs-rich-text
@@ -2726,6 +3091,8 @@ an overdue item carries how late it is in red."
          (ctx (orgzly-data-query-context)))
     (apply #'jetpacs-lazy-column
            (append
+            (when orgzly-ui--select-mode
+              (list (orgzly-ui--selection-bar)))
             (when (> (length searches) 1)
               (list (apply #'jetpacs-scroll-row
                            (mapcar (lambda (ss)
@@ -2745,6 +3112,19 @@ an overdue item carries how late it is in red."
 (jetpacs-shell-define-view "orgzly.agenda"
   :builder (lambda (snackbar)
              (jetpacs-shell-tab-view "orgzly.agenda" (orgzly-agenda--body)
+                                  :top-bar
+                                  (jetpacs-shell-default-top-bar
+                                   "Agenda"
+                                   :extra-actions
+                                   ;; Orgzly's multi-select works on agenda
+                                   ;; hits too; same toggle as the book view.
+                                   (list (jetpacs-icon-button
+                                          (if orgzly-ui--select-mode
+                                              "close" "checklist")
+                                          (jetpacs-action
+                                           "orgzly.book.select-mode"
+                                           :when-offline "drop")
+                                          :content-description "Select notes")))
                                   :snackbar snackbar))
   :tab '(:icon "event" :label "Agenda")
   :order 11)
@@ -2783,6 +3163,9 @@ an overdue item carries how late it is in red."
 (require 'orgzly-agenda)
 
 (declare-function orgzly-ui--note-row "orgzly-ui")
+(declare-function orgzly-ui--quick-row "orgzly-ui")
+(declare-function orgzly-ui--selection-bar "orgzly-ui")
+(defvar orgzly-ui--select-mode)
 
 (defcustom orgzly-saved-searches
   '(("Agenda" . ".it.done ad.7")
@@ -2818,17 +3201,26 @@ an overdue item carries how late it is in red."
       (condition-case err
           (let* ((query (orgzly-query-parse q))
                  (ctx (orgzly-data-query-context)))
-            (if (plist-get query :agenda-days)
-                (orgzly-agenda-day-nodes (orgzly-data-entries) query ctx)
-              (let* ((hits (orgzly-query-select (orgzly-data-entries) query ctx))
-                     (n (length hits))
-                     (shown (seq-take hits orgzly-search--result-cap)))
-                (cons
-                 (jetpacs-section-header
-                  (format "%d result%s" n (if (= n 1) "" "s")))
-                 (mapcar (lambda (e)
-                           (orgzly-ui--note-row e :show-book t :hide-content t))
-                         shown)))))
+            (append
+             (when orgzly-ui--select-mode
+               (list (orgzly-ui--selection-bar)))
+             (if (plist-get query :agenda-days)
+                 (orgzly-agenda-day-nodes (orgzly-data-entries) query ctx)
+               (let* ((hits (orgzly-query-select (orgzly-data-entries)
+                                                 query ctx))
+                      (n (length hits))
+                      (shown (seq-take hits orgzly-search--result-cap)))
+                 (cons
+                  (jetpacs-section-header
+                   (format "%d result%s" n (if (= n 1) "" "s")))
+                  ;; Hits carry the quick popup (swipe / long-press),
+                  ;; and in select mode the rows toggle selection —
+                  ;; Orgzly's CAB over search results.
+                  (mapcar (lambda (e)
+                            (orgzly-ui--quick-row
+                             e (orgzly-ui--note-row e :show-book t
+                                                    :hide-content t)))
+                          shown))))))
         (error
          (list (jetpacs-card
                 (list (jetpacs-text (format "Query error: %s"
@@ -2926,6 +3318,19 @@ an overdue item carries how late it is in red."
 (jetpacs-shell-define-view "orgzly.search"
   :builder (lambda (snackbar)
              (jetpacs-shell-tab-view "orgzly.search" (orgzly-search--body)
+                                  :top-bar
+                                  (jetpacs-shell-default-top-bar
+                                   "Search"
+                                   :extra-actions
+                                   ;; Orgzly's multi-select works on query
+                                   ;; hits too; same toggle as the book view.
+                                   (list (jetpacs-icon-button
+                                          (if orgzly-ui--select-mode
+                                              "close" "checklist")
+                                          (jetpacs-action
+                                           "orgzly.book.select-mode"
+                                           :when-offline "drop")
+                                          :content-description "Select notes")))
                                   :snackbar snackbar))
   :tab '(:icon "search" :label "Search")
   :order 12)
@@ -3027,9 +3432,11 @@ an overdue item carries how late it is in red."
 
 ;; Orgzly's reminder classes on the jetpacs `reminders.set' frame: exact
 ;; alarms for scheduled times, deadline times, and events, each behind its
-;; own toggle; date-only items remind at `orgzly-reminders-daily-time'.
-;; The set is replace-set semantics and persisted across reboots by the
-;; companion, so each shell push simply re-derives the upcoming window.
+;; own toggle; date-only items remind at `orgzly-reminders-daily-time',
+;; and deadline/event reminders lead by the warning cookie.  Armed like
+;; Orgzly: each note's next future occurrence, however far out.  The set
+;; is replace-set semantics and persisted across reboots by the
+;; companion; each shell push re-derives it.
 ;;
 ;; Companion-protocol limit (see docs/PARITY.md): the reminder
 ;; notification carries no Done/Snooze buttons — tapping it opens the
@@ -3051,17 +3458,13 @@ an overdue item carries how late it is in red."
   "Remind at deadline times (Orgzly: reminders for deadlines)."
   :type 'boolean :group 'orgzly)
 
-(defcustom orgzly-reminders-event nil
+(defcustom orgzly-reminders-event t
   "Remind at event times — plain active timestamps (Orgzly: events)."
   :type 'boolean :group 'orgzly)
 
 (defcustom orgzly-reminders-daily-time "09:00"
   "Clock time (HH:MM) at which date-only items remind."
   :type 'string :group 'orgzly)
-
-(defcustom orgzly-reminders-horizon-hours 24
-  "How far ahead reminders are armed; each push re-derives the window."
-  :type 'integer :group 'orgzly)
 
 (defun orgzly-reminders--daily-offset ()
   "Seconds past midnight of `orgzly-reminders-daily-time'."
@@ -3076,49 +3479,71 @@ an overdue item carries how late it is in red."
           (when orgzly-reminders-deadline '(deadline))
           (when orgzly-reminders-event '(event))))
 
-(defun orgzly-reminders--entry-specs (entry now horizon done-keywords)
-  "Reminder spec alists for ENTRY within [NOW, NOW+HORIZON)."
+(defun orgzly-reminders--next-at (ts now daily warned)
+  "Reminder float-time for TS's next occurrence after NOW, or nil.
+The reminder time of an occurrence is the occurrence itself, led by the
+warning/delay cookie when WARNED (Orgzly: deadlines and events), and
+date-only stamps remind at DAILY seconds past midnight.  A repeater
+steps until that reminder time is ahead of NOW — Orgzly arms the next
+future occurrence with no horizon."
+  (when-let ((base (alist-get 'time ts)))
+    (let* ((rep (orgzly-agenda--parse-repeater (alist-get 'repeater ts)))
+           (warn (and warned (orgzly-agenda--parse-warning
+                              (alist-get 'warning ts))))
+           (at-of (lambda (occ)
+                    (let ((at (if warn
+                                  (orgzly-agenda--step
+                                   occ (car warn) (- (cdr warn)))
+                                occ)))
+                      (if (alist-get 'has-time ts)
+                          at
+                        (+ (orgzly-agenda--day-start 0 (seconds-to-time at))
+                           daily)))))
+           (occ base)
+           (at (funcall at-of base))
+           (guard 0))
+      (when rep
+        (while (and (<= at now) (< guard 1000))
+          (setq occ (orgzly-agenda--step occ (car rep) (cdr rep))
+                at (funcall at-of occ)
+                guard (1+ guard))))
+      (and (> at now) at))))
+
+(defun orgzly-reminders--entry-specs (entry now done-keywords)
+  "Reminder spec alists for ENTRY: the next future time per class."
   (unless (member (alist-get 'state entry) done-keywords)
-    (let ((end (+ now horizon))
-          (daily (orgzly-reminders--daily-offset))
+    (let ((daily (orgzly-reminders--daily-offset))
           specs)
       (dolist (kind (orgzly-reminders--kinds))
         (dolist (ts (if (eq kind 'event)
                         (alist-get 'events entry)
                       (when-let ((one (alist-get kind entry))) (list one))))
-          ;; Expand from slightly in the past so a repeater's occurrence
-          ;; earlier today still steps forward into the window.
-          (dolist (occ (orgzly-agenda--occurrences ts now end t))
-            (let ((at (if (alist-get 'has-time ts)
-                          occ
-                        ;; Date-only: remind at the daily reminder time.
-                        (+ (orgzly-agenda--day-start
-                            0 (seconds-to-time occ))
-                           daily))))
-              (when (and (> at now) (< at end))
-                (push
-                 `((id . ,(format "orgzly:%s:%s:%s:%d"
-                                  (alist-get 'file entry)
-                                  (alist-get 'pos entry) kind (truncate at)))
-                   (at_ms . ,(truncate (* at 1000)))
-                   (title . ,(alist-get 'title entry))
-                   (body . ,(format "%s · %s · %s"
-                                    (capitalize (symbol-name kind))
-                                    (format-time-string
-                                     "%H:%M" (seconds-to-time at))
-                                    (alist-get 'book entry))))
-                 specs))))))
+          (when-let ((at (orgzly-reminders--next-at
+                          ts now daily (memq kind '(deadline event)))))
+            (push
+             `((id . ,(format "orgzly:%s:%s:%s:%d"
+                              (alist-get 'file entry)
+                              (alist-get 'pos entry) kind (truncate at)))
+               (at_ms . ,(truncate (* at 1000)))
+               (title . ,(alist-get 'title entry))
+               (body . ,(format "%s · %s · %s"
+                                (capitalize (symbol-name kind))
+                                (format-time-string
+                                 "%H:%M" (seconds-to-time at))
+                                (alist-get 'book entry))))
+             specs))))
       specs)))
 
 (defun orgzly-reminders-upcoming (&optional now)
-  "Every reminder spec within the horizon, across all books."
+  "Every armed reminder spec across all books.
+One per note and class: its next future occurrence, however far out
+(Orgzly's model); each push re-derives the set."
   (let* ((now (float-time (or now (current-time))))
-         (horizon (* 3600 orgzly-reminders-horizon-hours))
          (done (cdr (orgzly-data-todo-keywords)))
          specs)
     (dolist (entry (orgzly-data-entries))
       (setq specs (nconc specs
-                         (orgzly-reminders--entry-specs entry now horizon done))))
+                         (orgzly-reminders--entry-specs entry now done))))
     (sort specs (lambda (a b) (< (alist-get 'at_ms a) (alist-get 'at_ms b))))))
 
 (defvar orgzly-reminders--last 'unset
@@ -3391,8 +3816,7 @@ Off matches Orgzly: sharing creates the note and gets out of the way."
    '((orgzly-reminders-scheduled . (:label "For scheduled times"))
      (orgzly-reminders-deadline . (:label "For deadlines"))
      (orgzly-reminders-event . (:label "For events"))
-     (orgzly-reminders-daily-time . (:label "Daily time for date-only notes"))
-     (orgzly-reminders-horizon-hours . (:label "Arm window (hours)"))))
+     (orgzly-reminders-daily-time . (:label "Daily time for date-only notes"))))
 
   (jetpacs-settings-register-section
    "Org file format"

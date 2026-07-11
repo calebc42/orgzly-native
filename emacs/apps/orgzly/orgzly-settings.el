@@ -58,8 +58,7 @@
    '((orgzly-reminders-scheduled . (:label "For scheduled times"))
      (orgzly-reminders-deadline . (:label "For deadlines"))
      (orgzly-reminders-event . (:label "For events"))
-     (orgzly-reminders-daily-time . (:label "Daily time for date-only notes"))
-     (orgzly-reminders-horizon-hours . (:label "Arm window (hours)"))))
+     (orgzly-reminders-daily-time . (:label "Daily time for date-only notes"))))
 
   (jetpacs-settings-register-section
    "Org file format"

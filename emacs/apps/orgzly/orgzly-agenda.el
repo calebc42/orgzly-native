@@ -22,6 +22,9 @@
 
 (declare-function orgzly-ui--note-row "orgzly-ui")
 (declare-function orgzly-ui--icon-line "orgzly-ui")
+(declare-function orgzly-ui--quick-row "orgzly-ui")
+(declare-function orgzly-ui--selection-bar "orgzly-ui")
+(defvar orgzly-ui--select-mode)
 
 (defconst orgzly-agenda--meta-color "#8a8a8a")
 
@@ -40,6 +43,14 @@
     (cons (pcase (match-string 2 repeater)
             ("h" 'hour) ("d" 'day) ("w" 'week) ("m" 'month) ("y" 'year))
           (string-to-number (match-string 1 repeater)))))
+
+(defun orgzly-agenda--parse-warning (warning)
+  "Parse WARNING (\"-2d\", \"--3w\") into (UNIT . VALUE), or nil."
+  (when (and (stringp warning)
+             (string-match "\\`--?\\([0-9]+\\)\\([hdwmy]\\)\\'" warning))
+    (cons (pcase (match-string 2 warning)
+            ("h" 'hour) ("d" 'day) ("w" 'week) ("m" 'month) ("y" 'year))
+          (string-to-number (match-string 1 warning)))))
 
 (defun orgzly-agenda--step (time unit value)
   "TIME advanced by VALUE UNITs, calendar-aware for months and years."
@@ -96,18 +107,35 @@ collapse into today."
       (let ((done (member (alist-get 'state entry) (alist-get 'done ctx))))
         (dolist (kind '(scheduled deadline))
           (when-let ((ts (alist-get kind entry)))
-            (dolist (occ (orgzly-agenda--occurrences
-                          ts window-start window-end done))
-              (let* ((overdue (< occ window-start))
-                     (day (if overdue window-start
-                            (orgzly-agenda--day-start
-                             0 (seconds-to-time occ)))))
-                (push `((day . ,day) (time . ,occ) (kind . ,kind)
-                        (overdue-days
-                         . ,(when overdue
-                              (max 1 (floor (/ (- window-start occ) 86400)))))
-                        (entry . ,entry))
-                      items)))))
+            ;; A deadline with a warning cookie surfaces `warning'
+            ;; early (Orgzly applies warningPeriod to deadlines only):
+            ;; widen the expansion window so a due date beyond it still
+            ;; yields its early occurrence, then bucket each occurrence
+            ;; at max(today, due - warning).
+            (let* ((warn (and (eq kind 'deadline)
+                              (orgzly-agenda--parse-warning
+                               (alist-get 'warning ts))))
+                   (end (if warn (orgzly-agenda--step
+                                  window-end (car warn) (cdr warn))
+                          window-end)))
+              (dolist (occ (orgzly-agenda--occurrences
+                            ts window-start end done))
+                (let* ((occ (if (and warn (>= occ window-start))
+                                (max window-start
+                                     (orgzly-agenda--step
+                                      occ (car warn) (- (cdr warn))))
+                              occ))
+                       (overdue (< occ window-start))
+                       (day (if overdue window-start
+                              (orgzly-agenda--day-start
+                               0 (seconds-to-time occ)))))
+                  (push `((day . ,day) (time . ,occ) (kind . ,kind)
+                          (overdue-days
+                           . ,(when overdue
+                                (max 1 (floor (/ (- window-start occ)
+                                                 86400)))))
+                          (entry . ,entry))
+                        items))))))
         (dolist (ts (alist-get 'events entry))
           (dolist (occ (orgzly-agenda--occurrences ts window-start window-end t))
             (push `((day . ,(orgzly-agenda--day-start 0 (seconds-to-time occ)))
@@ -170,23 +198,26 @@ today — except overdue scheduled ones when
 
 (defun orgzly-agenda--item-row (item)
   "One agenda item as the standard Orgzly note row.
-Only the planning time responsible for the item's presence shows, and
-an overdue item carries how late it is in red."
+Only the planning time responsible for the item's presence shows, an
+overdue item carries how late it is in red, and — as on the notebook
+outline — swipe or long-press opens the quick-action popup."
   (let* ((entry (alist-get 'entry item))
          (kind (alist-get 'kind item))
          (overdue (alist-get 'overdue-days item))
          (row (orgzly-ui--note-row entry :show-book t :only-kind kind
                                    :hide-content t)))
-    (if (null overdue)
+    (orgzly-ui--quick-row
+     entry
+     (if (null overdue)
+         row
+       (jetpacs-column
         row
-      (jetpacs-column
-       row
-       (jetpacs-row
-        (jetpacs-spacer :width 4)
-        (orgzly-ui--icon-line "history"
-                              (format "%d day%s overdue" overdue
-                                      (if (= overdue 1) "" "s"))
-                              "#e53935"))))))
+        (jetpacs-row
+         (jetpacs-spacer :width 4)
+         (orgzly-ui--icon-line "history"
+                               (format "%d day%s overdue" overdue
+                                       (if (= overdue 1) "" "s"))
+                               "#e53935")))))))
 
 (defun orgzly-agenda--empty-day-node ()
   (jetpacs-rich-text
@@ -230,6 +261,8 @@ an overdue item carries how late it is in red."
          (ctx (orgzly-data-query-context)))
     (apply #'jetpacs-lazy-column
            (append
+            (when orgzly-ui--select-mode
+              (list (orgzly-ui--selection-bar)))
             (when (> (length searches) 1)
               (list (apply #'jetpacs-scroll-row
                            (mapcar (lambda (ss)
@@ -249,6 +282,19 @@ an overdue item carries how late it is in red."
 (jetpacs-shell-define-view "orgzly.agenda"
   :builder (lambda (snackbar)
              (jetpacs-shell-tab-view "orgzly.agenda" (orgzly-agenda--body)
+                                  :top-bar
+                                  (jetpacs-shell-default-top-bar
+                                   "Agenda"
+                                   :extra-actions
+                                   ;; Orgzly's multi-select works on agenda
+                                   ;; hits too; same toggle as the book view.
+                                   (list (jetpacs-icon-button
+                                          (if orgzly-ui--select-mode
+                                              "close" "checklist")
+                                          (jetpacs-action
+                                           "orgzly.book.select-mode"
+                                           :when-offline "drop")
+                                          :content-description "Select notes")))
                                   :snackbar snackbar))
   :tab '(:icon "event" :label "Agenda")
   :order 11)

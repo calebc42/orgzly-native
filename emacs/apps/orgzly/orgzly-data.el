@@ -293,18 +293,38 @@ An alist:
   (clrhash orgzly-data--cache))
 
 (defun orgzly-data--parse-ts (raw)
-  "Parse org timestamp string RAW into the TS alist, or nil."
+  "Parse org timestamp string RAW into the TS alist, or nil.
+Besides the start time, captures every cookie Orgzly round-trips:
+the end of a time range (`10:00-12:00' → `end-time'), the repeater,
+and the warning/delay cookie (`-2d' on DEADLINE, `-2d'/`--2d' on
+SCHEDULED → `warning')."
   (when (and (stringp raw) (not (string-empty-p raw)))
     (condition-case nil
         (let* ((time (org-time-string-to-time raw))
                (has-time (and (string-match "[0-9]\\{1,2\\}:[0-9]\\{2\\}" raw) t))
+               (end-hhmm (and (string-match
+                               "[0-9]\\{1,2\\}:[0-9]\\{2\\}-\\([0-9]\\{1,2\\}\\):\\([0-9]\\{2\\}\\)"
+                               raw)
+                              (cons (string-to-number (match-string 1 raw))
+                                    (string-to-number (match-string 2 raw)))))
                (repeater (and (string-match
                                "\\([.+]?\\+[0-9]+[hdwmy]\\)" raw)
-                              (match-string 1 raw))))
+                              (match-string 1 raw)))
+               ;; `-N[u]' never collides with dates or times: those
+               ;; follow their digits with `-', `:' or space, not a
+               ;; repeater unit letter.
+               (warning (and (string-match "\\(--?[0-9]+[hdwmy]\\)" raw)
+                             (match-string 1 raw))))
           `((time . ,(float-time time))
             (has-time . ,has-time)
             (raw . ,raw)
-            (repeater . ,repeater)))
+            (repeater . ,repeater)
+            ,@(when end-hhmm
+                (let ((d (decode-time time)))
+                  `((end-time . ,(float-time
+                                  (encode-time 0 (cdr end-hhmm) (car end-hhmm)
+                                               (nth 3 d) (nth 4 d) (nth 5 d)))))))
+            ,@(when warning `((warning . ,warning)))))
       (error nil))))
 
 (defun orgzly-data--entry-at-point (book file)
@@ -515,15 +535,45 @@ searching the file for it."
   (orgzly-data--with-ref ref
     (org-edit-headline title)))
 
-(defun orgzly-data-set-planning (ref kind value)
-  "Set REF's planning KIND (`scheduled' or `deadline') to VALUE.
-VALUE is an org date/time string (\"2026-07-10\", \"2026-07-10 14:00\",
-optionally with a trailing repeater like \"+1w\"), or nil to remove."
+(defun orgzly-data--format-ts (parts)
+  "Canonical active timestamp assembled from the PARTS alist.
+PARTS holds strings under `date' (required, \"2026-07-20\"), `time'
+(\"14:00\"), `end' (\"15:30\", only with time), `repeater' (\"+1w\"),
+`warning' (\"-2d\")."
+  (let* ((date (alist-get 'date parts))
+         (time (alist-get 'time parts))
+         (end (alist-get 'end parts))
+         (day (encode-time 0 0 0
+                           (string-to-number (substring date 8 10))
+                           (string-to-number (substring date 5 7))
+                           (string-to-number (substring date 0 4)))))
+    (concat "<" (format-time-string "%Y-%m-%d %a" day)
+            (and time (concat " " time (and end (concat "-" end))))
+            (when-let ((r (alist-get 'repeater parts))) (concat " " r))
+            (when-let ((w (alist-get 'warning parts))) (concat " " w))
+            ">")))
+
+(defun orgzly-data-set-planning (ref kind parts)
+  "Set REF's planning KIND (`scheduled' or `deadline') from PARTS.
+PARTS is nil to remove the entry, or an alist for
+`orgzly-data--format-ts'.  `org-schedule'/`org-deadline' manage the
+planning line's placement and removal, but they drop trailing
+repeater/warning cookies from their TIME argument (and would lose an
+end time passed alongside them) — so the stamp they insert is
+rewritten whole from PARTS."
   (orgzly-data--with-ref ref
-    (let ((fn (if (eq kind 'deadline) #'org-deadline #'org-schedule)))
-      (if (or (null value) (string-empty-p value))
+    (let ((fn (if (eq kind 'deadline) #'org-deadline #'org-schedule))
+          (date (alist-get 'date parts)))
+      (if (null date)
           (funcall fn '(4))
-        (funcall fn nil value)))))
+        (funcall fn nil date)
+        (org-back-to-heading t)
+        (let ((bound (line-end-position 2))
+              (re (concat (if (eq kind 'deadline)
+                              org-deadline-string org-scheduled-string)
+                          "[ \t]*\\(<[^>\n]+>\\)")))
+          (when (re-search-forward re bound t)
+            (replace-match (orgzly-data--format-ts parts) t t nil 1)))))))
 
 (defun orgzly-data-set-content (ref content)
   "Replace REF's content (text between metadata and next heading)."
@@ -580,6 +630,50 @@ optionally with a trailing repeater like \"+1w\"), or nil to remove."
   (let ((buf (orgzly-data--goto-ref ref)))
     (with-current-buffer buf
       (save-excursion (org-copy-subtree)))))
+
+(defun orgzly-data--refs-in-order (refs)
+  "REFS sorted into document order (file, then position)."
+  (sort (copy-sequence refs)
+        (lambda (a b)
+          (let ((fa (alist-get 'file a)) (fb (alist-get 'file b)))
+            (if (equal fa fb)
+                (< (alist-get 'pos a) (alist-get 'pos b))
+              (string-lessp fa fb))))))
+
+(defun orgzly-data--subtree-text (&optional delete)
+  "Text of the subtree at point, re-rooted to level 1; DELETE cuts it.
+Re-rooting keeps a multi-selection paste-able as one block:
+`org-paste-subtree' accepts a set of trees only when none sits above
+the first."
+  (org-back-to-heading t)
+  (let* ((level (org-current-level))
+         (beg (point))
+         (end (progn (org-end-of-subtree t t) (point)))
+         (text (buffer-substring-no-properties beg end)))
+    (when delete (delete-region beg end))
+    (unless (string-suffix-p "\n" text) (setq text (concat text "\n")))
+    (if (<= level 1)
+        text
+      (replace-regexp-in-string
+       (format "^\\*\\{%d\\}\\(\\*+ \\)" (1- level)) "\\1" text))))
+
+(defun orgzly-data-cut-notes (refs)
+  "Cut REFS' subtrees as one document-ordered clipboard block.
+Extraction runs bottom-up so earlier positions stay valid; a single
+paste restores all of them (Orgzly's batch cut)."
+  (let (texts)
+    (dolist (ref (reverse (orgzly-data--refs-in-order refs)))
+      (push (orgzly-data--with-ref ref
+              (orgzly-data--subtree-text t))
+            texts))
+    (kill-new (string-join texts ""))))
+
+(defun orgzly-data-copy-notes (refs)
+  "Copy REFS' subtrees as one document-ordered clipboard block."
+  (kill-new (mapconcat (lambda (ref)
+                         (with-current-buffer (orgzly-data--goto-ref ref)
+                           (save-excursion (orgzly-data--subtree-text))))
+                       (orgzly-data--refs-in-order refs) "")))
 
 (defun orgzly-data-paste-note (book &optional ref)
   "Paste the clipboard subtree into BOOK, after REF or at the end."
@@ -645,14 +739,17 @@ through `org-todo' (a repeating task reschedules instead of closing)."
                     (or (cadr kws) "DONE")))))))
 
 (cl-defun orgzly-data-new-note (book title &key state priority tags
-                                     scheduled deadline content under)
+                                     scheduled deadline content under
+                                     sibling before)
   "Create a note in BOOK titled TITLE; returns its ref.
 STATE/PRIORITY/TAGS/SCHEDULED/DEADLINE/CONTENT seed the metadata
 (strings; SCHEDULED/DEADLINE are org date strings).  UNDER, when
-non-nil, is a parent ref the note is created beneath; otherwise the
-note is a top-level heading appended to the book (or prepended, per
-`orgzly-new-note-prepend').  Defaults honour the Orzgly new-note
-settings (`orgzly-new-note-state', created-at property)."
+non-nil, is a parent ref the note is created beneath; SIBLING a ref
+the note is created next to at the same level — after its subtree, or
+directly above it when BEFORE (Orgzly's new above/under/below).
+Otherwise the note is a top-level heading appended to the book (or
+prepended, per `orgzly-new-note-prepend').  Defaults honour the Orzgly
+new-note settings (`orgzly-new-note-state', created-at property)."
   (let ((file (orgzly-data-book-file book))
         (state (or state orgzly-new-note-state)))
     (unless (file-exists-p file) (orgzly-data-create-book book))
@@ -665,6 +762,13 @@ settings (`orgzly-new-note-state', created-at property)."
            (org-back-to-heading t)
            (setq level (1+ (org-current-level)))
            (org-end-of-subtree t t))
+          (sibling
+           (goto-char (alist-get 'pos sibling))
+           (org-back-to-heading t)
+           (setq level (org-current-level))
+           (unless before
+             (org-end-of-subtree t t)
+             (unless (bolp) (insert "\n"))))
           (orgzly-new-note-prepend
            (goto-char (point-min))
            (if (re-search-forward org-outline-regexp-bol nil t)

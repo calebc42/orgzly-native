@@ -184,10 +184,11 @@ Inbox preface text.
                  (orgzly-data-entries)
                  (orgzly-query-parse "i.todo s.today")
                  ctx)))
-     ;; Default sort for an s. query is scheduled time: the date-only
-     ;; timestamp (midnight) precedes the 10:00 one, as in Orgzly.
+     ;; Default sort for an s. query is scheduled time: on the same
+     ;; day, timed entries precede date-only ones (upstream's
+     ;; `hour IS NULL' tiebreak).
      (should (equal (mapcar (lambda (e) (alist-get 'title e)) hits)
-                    '("Water plants" "Call mom"))))))
+                    '("Call mom" "Water plants"))))))
 
 ;; ─── Mutations ───────────────────────────────────────────────────────────────
 
@@ -209,7 +210,7 @@ Inbox preface text.
 (ert-deftest orgzly-data-set-planning-and-content ()
   (orgzly-data-test--with-books
    (let ((ref (orgzly-data-entry-ref (orgzly-data-test--entry "Loose thought"))))
-     (orgzly-data-set-planning ref 'deadline "2026-08-01")
+     (orgzly-data-set-planning ref 'deadline '((date . "2026-08-01")))
      (let ((e (orgzly-data-test--entry "Loose thought")))
        (should (alist-get 'time (alist-get 'deadline e)))
        (should-not (alist-get 'has-time (alist-get 'deadline e))))
@@ -219,6 +220,45 @@ Inbox preface text.
      (let ((e (orgzly-data-test--entry "Loose thought")))
        (should (equal (alist-get 'content e) "New body\nSecond line"))
        (should (= (alist-get 'content-lines e) 2))))))
+
+(ert-deftest orgzly-data-parse-ts-cookies ()
+  "End times and warning/delay cookies are captured, not just start+repeater."
+  (let ((ts (orgzly-data--parse-ts "<2026-07-20 Mon 14:00-15:30 +1w -2d>")))
+    (should (alist-get 'has-time ts))
+    (should (equal (alist-get 'repeater ts) "+1w"))
+    (should (equal (alist-get 'warning ts) "-2d"))
+    (should (equal (format-time-string
+                    "%H:%M" (seconds-to-time (alist-get 'end-time ts)))
+                   "15:30")))
+  ;; First-only delay; no false cookie hits from dates or time ranges.
+  (should (equal (alist-get 'warning
+                            (orgzly-data--parse-ts "<2026-07-20 Mon --3d>"))
+                 "--3d"))
+  (let ((plain (orgzly-data--parse-ts "<2026-07-20 Mon 10:00-12:00>")))
+    (should-not (alist-get 'warning plain))
+    (should-not (alist-get 'repeater plain))))
+
+(ert-deftest orgzly-data-set-planning-round-trip ()
+  "Every cookie survives a planning rewrite (org-schedule drops them)."
+  (orgzly-data-test--with-books
+   (let ((ref (orgzly-data-entry-ref (orgzly-data-test--entry "Loose thought"))))
+     (orgzly-data-set-planning ref 'scheduled
+                               '((date . "2026-07-20") (time . "14:00")
+                                 (end . "15:30") (repeater . "+1w")
+                                 (warning . "-2d")))
+     (let ((ts (alist-get 'scheduled (orgzly-data-test--entry "Loose thought"))))
+       (should (alist-get 'has-time ts))
+       (should (equal (alist-get 'repeater ts) "+1w"))
+       (should (equal (alist-get 'warning ts) "-2d"))
+       (should (equal (format-time-string
+                       "%H:%M" (seconds-to-time (alist-get 'end-time ts)))
+                      "15:30")))
+     ;; Re-setting just the date keeps nothing implicitly — the caller
+     ;; passes the full parts; here without cookies they are gone.
+     (orgzly-data-set-planning ref 'scheduled '((date . "2026-07-21")))
+     (let ((ts (alist-get 'scheduled (orgzly-data-test--entry "Loose thought"))))
+       (should-not (alist-get 'repeater ts))
+       (should-not (alist-get 'warning ts))))))
 
 (ert-deftest orgzly-data-new-note-defaults ()
   (orgzly-data-test--with-books
@@ -232,6 +272,48 @@ Inbox preface text.
      (should (alist-get 'scheduled e))
      (should (alist-get 'created e))     ; CREATED stamped by default
      (should (equal (alist-get 'content e) "details")))))
+
+(ert-deftest orgzly-data-new-sibling ()
+  (orgzly-data-test--with-books
+   ;; Below: same level, directly after the sibling's subtree.
+   (let ((ref (orgzly-data-entry-ref (orgzly-data-test--entry "Ship report"))))
+     (orgzly-data-new-note "gtd" "Between" :sibling ref)
+     (should (= (alist-get 'level (orgzly-data-test--entry "Between")) 2))
+     (let ((titles (mapcar (lambda (x) (alist-get 'title x))
+                           (orgzly-data-entries "gtd"))))
+       (should (equal (seq-take (member "Ship report" titles) 3)
+                      '("Ship report" "Between" "Water plants")))))
+   ;; Above: same level, directly before the sibling.
+   (let ((ref (orgzly-data-entry-ref (orgzly-data-test--entry "Projects"))))
+     (orgzly-data-new-note "gtd" "Preface note" :sibling ref :before t)
+     (should (= (alist-get 'level (orgzly-data-test--entry "Preface note")) 1))
+     (let ((titles (mapcar (lambda (x) (alist-get 'title x))
+                           (orgzly-data-entries "gtd"))))
+       (should (equal (seq-take (member "Preface note" titles) 2)
+                      '("Preface note" "Projects")))))))
+
+(ert-deftest orgzly-data-batch-cut-copy-paste ()
+  (orgzly-data-test--with-books
+   ;; Batch-cut a level-2 and a level-1 note across books; one paste
+   ;; restores both, re-rooted at the target level.
+   (let ((refs (list (orgzly-data-entry-ref
+                      (orgzly-data-test--entry "Ship report"))
+                     (orgzly-data-entry-ref
+                      (orgzly-data-test--entry "Loose thought")))))
+     (orgzly-data-cut-notes refs)
+     (should-not (orgzly-data-test--entry "Ship report"))
+     (should-not (orgzly-data-test--entry "Loose thought"))
+     (orgzly-data-paste-note "inbox")
+     (should (= (alist-get 'level
+                           (orgzly-data-test--entry "Ship report" "inbox"))
+                1))
+     (should (orgzly-data-test--entry "Loose thought" "inbox")))
+   ;; Batch copy leaves the originals in place.
+   (orgzly-data-copy-notes
+    (list (orgzly-data-entry-ref (orgzly-data-test--entry "Water plants"))))
+   (should (orgzly-data-test--entry "Water plants" "gtd"))
+   (orgzly-data-paste-note "inbox")
+   (should (orgzly-data-test--entry "Water plants" "inbox"))))
 
 (ert-deftest orgzly-data-new-note-under-parent ()
   (orgzly-data-test--with-books

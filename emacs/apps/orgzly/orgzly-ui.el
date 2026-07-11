@@ -263,7 +263,9 @@ selection in multi-select mode)."
 (defconst orgzly-ui--quick-ops
   '(("state"       "State"       "flag"                "orgzly.note.pick-state")
     ("toggle-done" "Done"        "check_circle"        "orgzly.note.toggle-done")
+    ("new-above"   "New above"   "vertical_align_top"  "orgzly.note.new-above")
     ("new-under"   "New under"   "playlist_add"        "orgzly.note.new-under")
+    ("new-below"   "New below"   "vertical_align_bottom" "orgzly.note.new-below")
     ("refile"      "Refile"      "move_to_inbox"       "orgzly.note.refile")
     ("archive"     "Archive"     "archive"             "orgzly.note.archive")
     ("cut"         "Cut"         "content_cut"         "orgzly.note.cut")
@@ -300,7 +302,9 @@ selection in multi-select mode)."
       (funcall btn "toggle-done"))
      (jetpacs-divider)
      (apply #'jetpacs-flow-row
-            (mapcar btn '("new-under" "refile" "archive")))
+            (mapcar btn '("new-above" "new-under" "new-below")))
+     (apply #'jetpacs-flow-row
+            (mapcar btn '("refile" "archive")))
      (jetpacs-divider)
      (apply #'jetpacs-flow-row
             (mapcar btn '("cut" "copy" "paste" "delete"))))))
@@ -442,8 +446,26 @@ fold on-device, and swipe or long-press opens the quick-action popup."
      :on-long-tap quick
      :on-swipe quick)))
 
+(defun orgzly-ui--quick-row (entry header)
+  "HEADER wrapped so swipe or long-press opens ENTRY's quick popup.
+Search and agenda hits ride the same collapsible furniture as the book
+outline (a leaf's static chevron) — that's where the swipe and
+long-press gestures live, so query results get Orgzly's popup ops
+without new core primitives."
+  (let ((quick (jetpacs-action "orgzly.note.quick"
+                            :args (orgzly-data-entry-ref entry)
+                            :when-offline "drop")))
+    (jetpacs-collapsible
+     (format "orgzly-hit:%s:%s" (alist-get 'file entry) (alist-get 'pos entry))
+     header nil
+     :collapsed t
+     :on-long-tap quick
+     :on-swipe quick)))
+
 (defun orgzly-ui--selection-bar ()
-  "Orgzly's multi-select action bar, shown while selecting."
+  "Orgzly's multi-select action bar, shown while selecting.
+Second row: the structure ops of upstream's \"move\" CAB submode, plus
+batch cut/copy."
   (jetpacs-surface
    (list
     (jetpacs-scroll-row
@@ -462,7 +484,22 @@ fold on-device, and swipe or long-press opens the quick-action popup."
      (jetpacs-button "Archive" (jetpacs-action "orgzly.bulk.archive")
                   :variant "text" :icon "archive")
      (jetpacs-button "Delete" (jetpacs-action "orgzly.bulk.delete")
-                  :variant "text" :icon "delete")))
+                  :variant "text" :icon "delete"))
+    (jetpacs-scroll-row
+     (jetpacs-button "Promote" (jetpacs-action "orgzly.bulk.promote")
+                  :variant "text" :icon "chevron_left")
+     (jetpacs-button "Demote" (jetpacs-action "orgzly.bulk.demote")
+                  :variant "text" :icon "chevron_right")
+     (jetpacs-button "Up" (jetpacs-action "orgzly.bulk.move"
+                                    :args '((dir . "up")))
+                  :variant "text" :icon "arrow_upward")
+     (jetpacs-button "Down" (jetpacs-action "orgzly.bulk.move"
+                                      :args '((dir . "down")))
+                  :variant "text" :icon "arrow_downward")
+     (jetpacs-button "Cut" (jetpacs-action "orgzly.bulk.cut")
+                  :variant "text" :icon "content_cut")
+     (jetpacs-button "Copy" (jetpacs-action "orgzly.bulk.copy")
+                  :variant "text" :icon "content_copy")))
    :color "surface_container" :shape "rounded" :padding 4 :fill t))
 
 (defun orgzly-ui--preface-node (book)
@@ -746,21 +783,42 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
 ;; ─── Timestamp dialog (Orgzly's dialog_timestamp) ────────────────────────────
 
 (defun orgzly-ui--plan-parts (ref kind)
-  "Current (DATE TIME REPEATER) strings of REF's KIND planning, or nils."
+  "REF's KIND planning as a parts alist (`orgzly-data-set-planning').
+String values under `date', `time', `end', `repeater', `warning';
+absent when unset."
   (let* ((entry (orgzly-ui--entry-for-ref ref))
          (ts (and entry (alist-get (intern kind) entry)))
-         (time (and ts (alist-get 'time ts))))
-    (list (and time (format-time-string "%Y-%m-%d" (seconds-to-time time)))
-          (and ts (alist-get 'has-time ts)
-               (format-time-string "%H:%M" (seconds-to-time time)))
-          (and ts (alist-get 'repeater ts)))))
+         (time (and ts (alist-get 'time ts)))
+         (end (and ts (alist-get 'end-time ts)))
+         (repeater (and ts (alist-get 'repeater ts)))
+         (warning (and ts (alist-get 'warning ts))))
+    (delq nil
+          (list (and time (cons 'date (format-time-string
+                                       "%Y-%m-%d" (seconds-to-time time))))
+                (and time (alist-get 'has-time ts)
+                     (cons 'time (format-time-string
+                                  "%H:%M" (seconds-to-time time))))
+                (and end (cons 'end (format-time-string
+                                     "%H:%M" (seconds-to-time end))))
+                (and repeater (cons 'repeater repeater))
+                (and warning (cons 'warning warning))))))
 
 (defun orgzly-ui--plan-dialog (ref kind)
-  "The timestamp dialog spec for REF's KIND planning line."
+  "The timestamp dialog spec for REF's KIND planning line.
+Orgzly's dialog_timestamp: date, time with an end time (range) once a
+time is set, repeater, and the warning/delay cookie; × drops just the
+time (keeping the date) or just the end."
   (let* ((parts (orgzly-ui--plan-parts ref kind))
+         (date (alist-get 'date parts))
+         (time (alist-get 'time parts))
+         (end (alist-get 'end parts))
          (args (lambda (&rest extra)
                  (append ref (cons (cons 'kind kind) extra)))))
-    (jetpacs-lazy-column
+    (apply
+     #'jetpacs-lazy-column
+     (delq
+      nil
+      (list
      (jetpacs-row
       (jetpacs-box
        (list (jetpacs-text (if (equal kind "deadline")
@@ -769,19 +827,52 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
        :weight 1.0)
       (jetpacs-button "Done" (jetpacs-action "dialog.dismiss") :variant "text")
       :align "center")
+     (apply
+      #'jetpacs-row
+      (append
+       (delq nil
+             (list
+              (jetpacs-icon (if (equal kind "deadline") "alarm" "today")
+                         :size 20 :color "outline")
+              (jetpacs-date-button (or date "Date")
+                                (jetpacs-action "orgzly.note.plan-date"
+                                             :args (funcall args '(dialog . t)))
+                                :value date)
+              (jetpacs-time-button (or time "Time")
+                                (jetpacs-action "orgzly.note.plan-time"
+                                             :args (funcall args '(dialog . t)))
+                                :value time)
+              (when time
+                (jetpacs-icon-button "close"
+                                  (jetpacs-action "orgzly.note.plan-drop-time"
+                                               :args (funcall args '(dialog . t)))
+                                  :content-description "Remove time"))))
+       '(:spacing 8 :align "center")))
+     (when time
+       (apply
+        #'jetpacs-row
+        (append
+         (delq nil
+               (list
+                (jetpacs-icon "schedule" :size 20 :color "outline")
+                (jetpacs-time-button (or end "End time")
+                                  (jetpacs-action "orgzly.note.plan-end"
+                                               :args (funcall args '(dialog . t)))
+                                  :value end)
+                (when end
+                  (jetpacs-icon-button "close"
+                                    (jetpacs-action "orgzly.note.plan-drop-end"
+                                                 :args (funcall args '(dialog . t)))
+                                    :content-description "Remove end time"))))
+         '(:spacing 8 :align "center"))))
      (jetpacs-row
-      (jetpacs-icon (if (equal kind "deadline") "alarm" "today")
-                 :size 20 :color "outline")
-      (jetpacs-date-button (or (nth 0 parts) "Date")
-                        (jetpacs-action "orgzly.note.plan-date"
-                                     :args (funcall args '(dialog . t)))
-                        :value (nth 0 parts))
-      (jetpacs-time-button (or (nth 1 parts) "Time")
-                        (jetpacs-action "orgzly.note.plan-time"
-                                     :args (funcall args '(dialog . t)))
-                        :value (nth 1 parts))
-      (jetpacs-button (or (nth 2 parts) "Repeat")
+      (jetpacs-icon "repeat" :size 20 :color "outline")
+      (jetpacs-button (or (alist-get 'repeater parts) "Repeat")
                    (jetpacs-action "orgzly.note.plan-repeater"
+                                :args (funcall args '(dialog . t)))
+                   :variant "text")
+      (jetpacs-button (or (alist-get 'warning parts) "Warning")
+                   (jetpacs-action "orgzly.note.plan-warning"
                                 :args (funcall args '(dialog . t)))
                    :variant "text")
       :spacing 8 :align "center")
@@ -790,7 +881,7 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
       (jetpacs-button "Clear"
                    (jetpacs-action "orgzly.note.plan-clear"
                                 :args (funcall args))
-                   :variant "text" :icon "close")))))
+                   :variant "text" :icon "close")))))))
 
 (jetpacs-defaction "orgzly.note.plan-dialog"
   (lambda (args _)
@@ -1020,6 +1111,24 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
           (jetpacs-shell-notify "Note created")
           (jetpacs-shell-push nil :switch-to "orgzly.note"))))))
 
+(defun orgzly-ui--new-sibling (args before)
+  "Create a same-level sibling of the note in ARGS (above when BEFORE)."
+  (let* ((sib (orgzly-ui--args-ref args))
+         (book (orgzly-data-book-name (alist-get 'file sib)))
+         (title (string-trim (read-string "Note title: "))))
+    (unless (string-empty-p title)
+      (let ((ref (orgzly-data-new-note book title
+                                       :sibling sib :before before)))
+        (setq orgzly-ui--note-ref ref)
+        (jetpacs-shell-notify "Note created")
+        (jetpacs-shell-push nil :switch-to "orgzly.note")))))
+
+(jetpacs-defaction "orgzly.note.new-above"
+  (lambda (args _) (orgzly-ui--new-sibling args t)))
+
+(jetpacs-defaction "orgzly.note.new-below"
+  (lambda (args _) (orgzly-ui--new-sibling args nil)))
+
 (jetpacs-defaction "orgzly.note.rename"
   ;; From the editor's inline title field (args carry `value') or a
   ;; bridged prompt.
@@ -1088,53 +1197,78 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
 ;; prompt.  Actions carrying (dialog . t) re-show the dialog with the
 ;; updated values, so it edits in place like Orgzly's.
 
-(defun orgzly-ui--plan-apply (ref kind date time repeater &optional dialog)
-  "Write the planning string assembled from DATE/TIME/REPEATER onto REF."
-  (orgzly-data-set-planning
-   ref (intern kind)
-   (and date (string-join (delq nil (list date time repeater)) " ")))
+(defun orgzly-ui--plan-apply (ref kind parts &optional dialog)
+  "Write the PARTS alist onto REF's KIND planning; nil PARTS removes."
+  (orgzly-data-set-planning ref (intern kind)
+                            (and (alist-get 'date parts) parts))
   (when dialog
     (jetpacs-send-dialog (orgzly-ui--plan-dialog ref kind)))
   (orgzly-ui--after-mutation nil))
 
+(defun orgzly-ui--plan-update (args field value)
+  "Re-apply the planning in ARGS with FIELD set to VALUE (nil removes)."
+  (let* ((ref (orgzly-ui--args-ref args))
+         (kind (alist-get 'kind args))
+         (parts (assq-delete-all field (orgzly-ui--plan-parts ref kind))))
+    (when value (push (cons field value) parts))
+    ;; An end time only makes sense on a timed stamp, and any edit
+    ;; before a date exists implies today (Orgzly's dialog defaults).
+    (unless (alist-get 'time parts)
+      (setq parts (assq-delete-all 'end parts)))
+    (unless (alist-get 'date parts)
+      (push (cons 'date (format-time-string "%Y-%m-%d")) parts))
+    (orgzly-ui--plan-apply ref kind parts (alist-get 'dialog args))))
+
 (jetpacs-defaction "orgzly.note.plan-date"
   (lambda (args _)
-    (let* ((ref (orgzly-ui--args-ref args))
-           (kind (alist-get 'kind args))
-           (parts (orgzly-ui--plan-parts ref kind)))
-      (orgzly-ui--plan-apply ref kind (alist-get 'value args)
-                             (nth 1 parts) (nth 2 parts)
-                             (alist-get 'dialog args)))))
+    (orgzly-ui--plan-update args 'date (alist-get 'value args))))
 
 (jetpacs-defaction "orgzly.note.plan-time"
   (lambda (args _)
-    (let* ((ref (orgzly-ui--args-ref args))
-           (kind (alist-get 'kind args))
-           (parts (orgzly-ui--plan-parts ref kind))
-           (date (or (nth 0 parts) (format-time-string "%Y-%m-%d"))))
-      (orgzly-ui--plan-apply ref kind date (alist-get 'value args)
-                             (nth 2 parts)
-                             (alist-get 'dialog args)))))
+    (orgzly-ui--plan-update args 'time (alist-get 'value args))))
+
+(jetpacs-defaction "orgzly.note.plan-end"
+  (lambda (args _)
+    (orgzly-ui--plan-update args 'end (alist-get 'value args))))
+
+(jetpacs-defaction "orgzly.note.plan-drop-time"
+  (lambda (args _)
+    (orgzly-ui--plan-update args 'time nil)))
+
+(jetpacs-defaction "orgzly.note.plan-drop-end"
+  (lambda (args _)
+    (orgzly-ui--plan-update args 'end nil)))
 
 (jetpacs-defaction "orgzly.note.plan-repeater"
   (lambda (args _)
-    (let* ((ref (orgzly-ui--args-ref args))
-           (kind (alist-get 'kind args))
-           (parts (orgzly-ui--plan-parts ref kind))
-           (rep (string-trim
-                 (read-string "Repeater (+1w, ++1m, .+2d; empty to clear): "
-                              (or (nth 2 parts) "")))))
-      (orgzly-ui--plan-apply ref kind
-                             (or (nth 0 parts) (format-time-string "%Y-%m-%d"))
-                             (nth 1 parts)
-                             (unless (string-empty-p rep) rep)
-                             (alist-get 'dialog args)))))
+    (let ((rep (string-trim
+                (read-string "Repeater (+1w, ++1m, .+2d; empty to clear): "
+                             (or (alist-get 'repeater
+                                            (orgzly-ui--plan-parts
+                                             (orgzly-ui--args-ref args)
+                                             (alist-get 'kind args)))
+                                 "")))))
+      (orgzly-ui--plan-update args 'repeater
+                              (unless (string-empty-p rep) rep)))))
+
+(jetpacs-defaction "orgzly.note.plan-warning"
+  (lambda (args _)
+    (let ((warn (string-trim
+                 (read-string
+                  "Warning/delay (-2d; --2d first-only; empty to clear): "
+                  (or (alist-get 'warning
+                                 (orgzly-ui--plan-parts
+                                  (orgzly-ui--args-ref args)
+                                  (alist-get 'kind args)))
+                      "")))))
+      (orgzly-ui--plan-update args 'warning
+                              (unless (string-empty-p warn) warn)))))
 
 (jetpacs-defaction "orgzly.note.plan-clear"
   (lambda (args _)
     (jetpacs-dismiss-dialog)
     (orgzly-ui--plan-apply (orgzly-ui--args-ref args) (alist-get 'kind args)
-                           nil nil nil)))
+                           nil)))
 
 ;; Properties.
 
@@ -1252,8 +1386,25 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
     (if (null refs)
         (jetpacs-shell-notify "Nothing selected")
       (dolist (ref refs) (funcall fn ref))
-      (unless keep-selection
-        (setq orgzly-ui--selection nil orgzly-ui--select-mode nil))
+      (if (not keep-selection)
+          (setq orgzly-ui--selection nil orgzly-ui--select-mode nil)
+        ;; Mutations shift positions; re-anchor the kept selection on
+        ;; the fresh scan so the checkboxes stay lit (mutations already
+        ;; re-resolve drifted refs by title).
+        (let ((entries (orgzly-data-entries)))
+          (setq orgzly-ui--selection
+                (delq nil
+                      (mapcar
+                       (lambda (ref)
+                         (when-let ((e (cl-find-if
+                                        (lambda (e)
+                                          (and (equal (alist-get 'file e)
+                                                      (alist-get 'file ref))
+                                               (equal (alist-get 'title e)
+                                                      (alist-get 'title ref))))
+                                        entries)))
+                           (orgzly-data-entry-ref e)))
+                       refs)))))
       (when message
         (jetpacs-shell-notify (format "%s (%d notes)" message (length refs))))))
   (jetpacs-shell-push))
@@ -1273,11 +1424,61 @@ leading ICON, the VALUE (or the muted HINT when empty), × to clear."
   (lambda (_ _)
     (orgzly-ui--bulk #'orgzly-data-toggle-done "Toggled" t)))
 
+(jetpacs-defaction "orgzly.bulk.promote"
+  ;; ignore-errors: a top-level note can't promote; skip it, don't
+  ;; abort the batch.
+  (lambda (_ _)
+    (orgzly-ui--bulk (lambda (ref) (ignore-errors (orgzly-data-promote ref)))
+                     "Promoted" t)))
+
+(jetpacs-defaction "orgzly.bulk.demote"
+  (lambda (_ _)
+    (orgzly-ui--bulk (lambda (ref) (ignore-errors (orgzly-data-demote ref)))
+                     "Demoted" t)))
+
+(jetpacs-defaction "orgzly.bulk.move"
+  ;; Top-first going up, bottom-first going down, so a run of selected
+  ;; siblings keeps its relative order (upstream's moving CAB);
+  ;; ignore-errors skips the note already at the edge.
+  (lambda (args _)
+    (let ((up (equal (alist-get 'dir args) "up"))
+          (ordered (orgzly-data--refs-in-order orgzly-ui--selection)))
+      (setq orgzly-ui--selection (if up ordered (reverse ordered)))
+      (orgzly-ui--bulk (lambda (ref)
+                         (ignore-errors
+                           (if up (orgzly-data-move-up ref)
+                             (orgzly-data-move-down ref))))
+                       (if up "Moved up" "Moved down") t))))
+
+(jetpacs-defaction "orgzly.bulk.cut"
+  (lambda (_ _)
+    (let ((refs orgzly-ui--selection))
+      (if (null refs)
+          (jetpacs-shell-notify "Nothing selected")
+        (orgzly-data-cut-notes refs)
+        (setq orgzly-ui--selection nil orgzly-ui--select-mode nil)
+        (jetpacs-shell-notify (format "Cut %d note%s" (length refs)
+                                   (if (= (length refs) 1) "" "s"))))
+      (jetpacs-shell-push))))
+
+(jetpacs-defaction "orgzly.bulk.copy"
+  (lambda (_ _)
+    (let ((refs orgzly-ui--selection))
+      (if (null refs)
+          (jetpacs-shell-notify "Nothing selected")
+        (orgzly-data-copy-notes refs)
+        (setq orgzly-ui--selection nil orgzly-ui--select-mode nil)
+        (jetpacs-shell-notify (format "Copied %d note%s" (length refs)
+                                   (if (= (length refs) 1) "" "s"))))
+      (jetpacs-shell-push))))
+
 (jetpacs-defaction "orgzly.bulk.plan"
   (lambda (args _)
     (let ((kind (intern (alist-get 'kind args)))
           (date (alist-get 'value args)))
-      (orgzly-ui--bulk (lambda (ref) (orgzly-data-set-planning ref kind date))
+      (orgzly-ui--bulk (lambda (ref)
+                         (orgzly-data-set-planning ref kind
+                                                   `((date . ,date))))
                        (format "%s → %s" (capitalize (symbol-name kind)) date)
                        t))))
 
