@@ -2,6 +2,7 @@
 
 ;; Copyright (C) 2026 calebc42 and contributors
 ;; SPDX-License-Identifier: GPL-3.0-or-later
+;; Package-Requires: ((emacs "30.1"))
 
 ;; Orgzly's agenda: a saved search whose ad.N option expands matching
 ;; notes into day buckets over the next N days.  Scheduled and deadline
@@ -12,21 +13,15 @@
 ;; The expansion lives here so the search view and the reminders module
 ;; reuse the same occurrence math.
 
+;;; Commentary:
+
+;; Recovered Orgzly domain logic; current presentation lives in orgzly-ui.el.
+
 ;;; Code:
 
 (require 'cl-lib)
-(require 'jetpacs-shell)
-(require 'jetpacs-widgets)
 (require 'orgzly-data)
 (require 'orgzly-query)
-
-(declare-function orgzly-ui--note-row "orgzly-ui")
-(declare-function orgzly-ui--icon-line "orgzly-ui")
-(declare-function orgzly-ui--quick-row "orgzly-ui")
-(declare-function orgzly-ui--selection-bar "orgzly-ui")
-(defvar orgzly-ui--select-mode)
-
-(defconst orgzly-agenda--meta-color "#8a8a8a")
 
 ;; ─── Occurrence expansion ────────────────────────────────────────────────────
 
@@ -71,7 +66,7 @@ A repeating timestamp contributes every repetition inside the window; a
 repeater-less range a synthetic daily catch-up); a base time before
 WINDOW-START contributes one overdue occurrence (the base itself)
 unless NO-OVERDUE."
-  (when-let ((time (alist-get 'time ts)))
+  (when-let* ((time (alist-get 'time ts)))
     (let* ((range-end (alist-get 'range-end ts))
            (rep (or (orgzly-agenda--parse-repeater (alist-get 'repeater ts))
                     (and range-end '(day . 1))))
@@ -117,7 +112,7 @@ collapse into today."
     (dolist (entry hits)
       (let ((done (member (alist-get 'state entry) (alist-get 'done ctx))))
         (dolist (kind '(scheduled deadline))
-          (when-let ((ts (alist-get kind entry)))
+          (when-let* ((ts (alist-get kind entry)))
             ;; A deadline with a warning cookie surfaces `warning'
             ;; early (Orgzly applies warningPeriod to deadlines only):
             ;; widen the expansion window so a due date beyond it still
@@ -160,7 +155,8 @@ collapse into today."
                      (< (alist-get 'time a) (alist-get 'time b))))))))
 
 (defun orgzly-agenda-day-groups (entries query ctx &optional now)
-  "Agenda items grouped per day: ((DAY . ITEMS) ...), days without items kept.
+  "Group ENTRIES matching QUERY in CTX at NOW per day.
+Return ((DAY . ITEMS) ...), retaining days without items.
 Overdue occurrences land in today's group (their `overdue-days' marks
 them); `orgzly-agenda-sections' splits them out Orgzly-style."
   (let* ((now (or now (current-time)))
@@ -180,7 +176,8 @@ as Orgzly does."
   :type 'boolean :group 'orgzly)
 
 (defun orgzly-agenda-sections (entries query ctx &optional now)
-  "Agenda sections: (`overdue' . ITEMS) first, then (DAY . ITEMS) per day.
+  "Group ENTRIES matching QUERY in CTX at NOW into agenda sections.
+Return (`overdue' . ITEMS) first, then (DAY . ITEMS) per day.
 The Overdue section collects occurrences whose base time is before
 today — except overdue scheduled ones when
 `orgzly-agenda-group-scheduled-with-today', which stay under Today."
@@ -196,124 +193,6 @@ today — except overdue scheduled ones when
       (setcdr (car groups)
               (cl-remove-if (lambda (it) (memq it overdue)) (cdr (car groups)))))
     (if overdue (cons (cons 'overdue overdue) groups) groups)))
-
-;; ─── Rendering ───────────────────────────────────────────────────────────────
-
-(defun orgzly-agenda--day-header (day now)
-  (let* ((today (orgzly-agenda--day-start 0 now))
-         (label (format-time-string "%A, %b %-d" (seconds-to-time day)))
-         (qualifier (cond ((= day today) "Today")
-                          ((= day (orgzly-agenda--day-start 1 now)) "Tomorrow"))))
-    (jetpacs-section-header
-     (if qualifier (format "%s · %s" qualifier label) label))))
-
-(defun orgzly-agenda--item-row (item)
-  "One agenda item as the standard Orgzly note row.
-Only the planning time responsible for the item's presence shows, an
-overdue item carries how late it is in red, and — as on the notebook
-outline — swipe or long-press opens the quick-action popup."
-  (let* ((entry (alist-get 'entry item))
-         (kind (alist-get 'kind item))
-         (overdue (alist-get 'overdue-days item))
-         (row (orgzly-ui--note-row entry :show-book t :only-kind kind
-                                   :hide-content t)))
-    (orgzly-ui--quick-row
-     entry
-     (if (null overdue)
-         row
-       (jetpacs-column
-        row
-        (jetpacs-row
-         (jetpacs-spacer :width 4)
-         (orgzly-ui--icon-line "history"
-                               (format "%d day%s overdue" overdue
-                                       (if (= overdue 1) "" "s"))
-                               "#e53935")))))))
-
-(defun orgzly-agenda--empty-day-node ()
-  (jetpacs-rich-text
-   (list (jetpacs-span "No notes" :color orgzly-agenda--meta-color))
-   :style 'caption :padding 8))
-
-(defun orgzly-agenda-day-nodes (entries query ctx &optional now hide-empty)
-  "Widget nodes: Overdue then day sections, shared with the search view."
-  (let ((now (or now (current-time))))
-    (cl-loop for (day . items) in (orgzly-agenda-sections entries query ctx now)
-             when (or items (and (not (eq day 'overdue)) (not hide-empty)))
-             append (cons (if (eq day 'overdue)
-                              (jetpacs-section-header "Overdue")
-                            (orgzly-agenda--day-header day now))
-                          (or (mapcar #'orgzly-agenda--item-row items)
-                              (list (orgzly-agenda--empty-day-node)))))))
-
-;; ─── The agenda tab ──────────────────────────────────────────────────────────
-
-(defcustom orgzly-agenda-hide-empty-days nil
-  "When non-nil, days with no notes are omitted (Orgzly: hide empty days)."
-  :type 'boolean :group 'orgzly)
-
-(defvar orgzly-agenda--current "Agenda"
-  "Name of the saved search the agenda tab is showing.")
-
-(declare-function orgzly-search-saved-searches "orgzly-search")
-
-(defun orgzly-agenda--searches ()
-  "The agenda-shaped saved searches (those carrying ad.N)."
-  (cl-remove-if-not
-   (lambda (ss) (plist-get (orgzly-query-parse (cdr ss)) :agenda-days))
-   (orgzly-search-saved-searches)))
-
-(defun orgzly-agenda--body ()
-  (let* ((searches (orgzly-agenda--searches))
-         (current (or (assoc orgzly-agenda--current searches)
-                      (car searches)))
-         (query-str (or (cdr current) ".it.done ad.7"))
-         (query (orgzly-query-parse query-str))
-         (ctx (orgzly-data-query-context)))
-    (apply #'jetpacs-lazy-column
-           (append
-            (when orgzly-ui--select-mode
-              (list (orgzly-ui--selection-bar)))
-            (when (> (length searches) 1)
-              (list (apply #'jetpacs-scroll-row
-                           (mapcar (lambda (ss)
-                                     (jetpacs-chip (car ss)
-                                                :selected (equal (car ss)
-                                                                 (car current))
-                                                :on-tap (jetpacs-action
-                                                         "orgzly.agenda.switch"
-                                                         :args `((name . ,(car ss)))
-                                                         :when-offline "drop")))
-                                   searches))))
-            (or (orgzly-agenda-day-nodes (orgzly-data-entries) query ctx nil
-                                         orgzly-agenda-hide-empty-days)
-                (list (jetpacs-empty-state :icon "event_available"
-                                        :title "Nothing scheduled")))))))
-
-(jetpacs-shell-define-view "orgzly.agenda"
-  :builder (lambda (snackbar)
-             (jetpacs-shell-tab-view "orgzly.agenda" (orgzly-agenda--body)
-                                  :top-bar
-                                  (jetpacs-shell-default-top-bar
-                                   "Agenda"
-                                   :extra-actions
-                                   ;; Orgzly's multi-select works on agenda
-                                   ;; hits too; same toggle as the book view.
-                                   (list (jetpacs-icon-button
-                                          (if orgzly-ui--select-mode
-                                              "close" "checklist")
-                                          (jetpacs-action
-                                           "orgzly.book.select-mode"
-                                           :when-offline "drop")
-                                          :content-description "Select notes")))
-                                  :snackbar snackbar))
-  :tab '(:icon "event" :label "Agenda")
-  :order 11)
-
-(jetpacs-defaction "orgzly.agenda.switch"
-  (lambda (args _)
-    (setq orgzly-agenda--current (alist-get 'name args))
-    (jetpacs-shell-push)))
 
 (provide 'orgzly-agenda)
 ;;; orgzly-agenda.el ends here

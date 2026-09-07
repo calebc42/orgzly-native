@@ -2,6 +2,7 @@
 
 ;; Copyright (C) 2026 calebc42 and contributors
 ;; SPDX-License-Identifier: GPL-3.0-or-later
+;; Package-Requires: ((emacs "30.1"))
 
 ;; Orgzly's data model, mapped onto plain org files:
 ;;   book = an .org file in `orgzly-directory' (name = base name)
@@ -21,6 +22,10 @@
 ;; Scans are memoised per file mtime; every mutation calls
 ;; `orgzly-data-invalidate' (and the shell refresh hook drops it too, per
 ;; the jetpacs cache contract).
+
+;;; Commentary:
+
+;; Recovered Orgzly domain logic; current presentation lives in orgzly-ui.el.
 
 ;;; Code:
 
@@ -43,11 +48,11 @@
   :type 'string :group 'orgzly)
 
 (defcustom orgzly-created-property "CREATED"
-  "Property name recording a note's creation time (cr. queries read it)."
+  "Property name recording a note's creation time for creation-date queries."
   :type 'string :group 'orgzly)
 
 (defcustom orgzly-new-note-state nil
-  "TODO state given to new notes, or nil for none (Orgzly: New note / Set state)."
+  "TODO state given to new notes, or nil for none."
   :type '(choice (const :tag "None" nil) string) :group 'orgzly)
 
 (defcustom orgzly-new-note-created-property t
@@ -68,18 +73,50 @@
 
 ;; ─── Books ───────────────────────────────────────────────────────────────────
 
+(defconst orgzly-data-max-books 64
+  "Maximum notebooks read in one refresh.")
+(defconst orgzly-data-max-file-bytes (* 1024 1024)
+  "Maximum bytes in one notebook before opening it.")
+(defconst orgzly-data-max-entries 2000
+  "Maximum headings parsed from one notebook.")
+
 (defun orgzly-data-book-file (book)
-  "Absolute path of BOOK's org file."
-  (expand-file-name (concat book ".org") orgzly-directory))
+  "Return BOOK's contained local Org file, rejecting aliases and traversal."
+  (unless (and (stringp book) (<= 1 (length book) 128)
+               (not (member book '("." "..")))
+               (not (string-match-p "[/\\\\\n\r]" book))
+               (not (file-remote-p orgzly-directory)))
+    (error "Invalid local notebook name"))
+  (let* ((root (file-name-as-directory (file-truename orgzly-directory)))
+         (file (expand-file-name (concat book ".org") root)))
+    (unless (equal (file-name-directory (file-truename file)) root)
+      (error "Notebook escapes Orgzly directory"))
+    (when (file-symlink-p file) (error "Notebook aliases are unsupported"))
+    file))
 
 (defun orgzly-data-book-name (file)
-  "Book name of FILE."
+  "Return the notebook name of FILE."
   (file-name-base file))
 
+(defun orgzly-data-check-file (file)
+  "Check FILE's canonical ownership and size before any read or edit."
+  (unless (equal (expand-file-name file)
+                 (orgzly-data-book-file (orgzly-data-book-name file)))
+    (error "File is outside Orgzly's notebook root"))
+  (when-let* ((attributes (file-attributes file)))
+    (unless (and (null (file-attribute-type attributes))
+                 (<= (file-attribute-size attributes) orgzly-data-max-file-bytes))
+      (error "Notebook is not a bounded regular file")))
+  file)
+
 (defun orgzly-data-book-files ()
-  "The notebook files: .org files directly under `orgzly-directory'."
+  "Return at most `orgzly-data-max-books' sorted, contained notebook files."
   (when (file-directory-p orgzly-directory)
-    (sort (directory-files orgzly-directory t "\\.org\\'" t) #'string-lessp)))
+    (let ((files (cl-remove-if (lambda (file) (string-prefix-p ".#" (file-name-nondirectory file)))
+                                     (directory-files orgzly-directory t "\\.org\\'"))))
+      (when (> (length files) orgzly-data-max-books)
+        (error "Too many Orgzly notebooks (maximum %d)" orgzly-data-max-books))
+      (mapcar #'orgzly-data-check-file files))))
 
 (defun orgzly-data-books ()
   "List of book alists: name, file, title (#+TITLE, or nil), mtime, count."
@@ -96,7 +133,7 @@
           (orgzly-data-book-files)))
 
 (defun orgzly-data-create-book (name)
-  "Create an empty book NAME. Errors if it exists."
+  "Create an empty book NAME.  Errors if it exists."
   (let ((file (orgzly-data-book-file name)))
     (when (file-exists-p file)
       (error "Book %s already exists" name))
@@ -111,7 +148,7 @@
         (new (orgzly-data-book-file new-name)))
     (when (file-exists-p new)
       (error "Book %s already exists" new-name))
-    (when-let ((buf (find-buffer-visiting file)))
+    (when-let* ((buf (find-buffer-visiting file)))
       (kill-buffer buf))
     (rename-file file new)
     (orgzly-data-invalidate)))
@@ -119,7 +156,7 @@
 (defun orgzly-data-delete-book (name)
   "Delete book NAME (its file)."
   (let ((file (orgzly-data-book-file name)))
-    (when-let ((buf (find-buffer-visiting file)))
+    (when-let* ((buf (find-buffer-visiting file)))
       (kill-buffer buf))
     (delete-file file)
     (orgzly-data-invalidate)))
@@ -236,16 +273,16 @@ Notebooks live as [[https://orgmode.org/][Org mode]] files in the
 one.  Edit them from Emacs and the app side by side, and sync or
 version them with any tool you like (git, syncthing, ssh).
 "
-  "Contents of the Getting Started notebook: Orgzly's tutorial book,
-reworded where this app deliberately diverges (quick-action popup,
+  "Contents of Orgzly's historical Getting Started tutorial notebook.
+Reworded where this app deliberately diverges (quick-action popup,
 checklist-toggle multi-select, left-edge fold chevron, sync by
 architecture).")
 
 (defun orgzly-data-import-getting-started ()
-  "(Re)create the Getting Started notebook and return its name.
+  "Recreate the Getting Started notebook and return its name.
 Like Orgzly's import, re-importing over an existing copy resets it."
   (let ((file (orgzly-data-book-file orgzly-data-getting-started-book)))
-    (when-let ((buf (find-buffer-visiting file)))
+    (when-let* ((buf (find-buffer-visiting file)))
       (kill-buffer buf))
     (make-directory (file-name-directory file) t)
     (with-temp-file file (insert orgzly-data--getting-started))
@@ -273,7 +310,7 @@ An alist:
    (filetags . LIST)                ; #+FILETAGS, colons stripped
    (settings . ((KEY . VALUE)...))  ; every other #+KEYWORD line
    (body . STR|nil))                ; the non-keyword prose"
-  (when-let ((preface (orgzly-data-book-preface book)))
+  (when-let* ((preface (orgzly-data-book-preface book)))
     (let (title created filetags settings body)
       (dolist (line (split-string preface "\n"))
         (if (string-match "^[ \t]*#\\+\\([[:alnum:]_]+\\):\\(.*\\)$" line)
@@ -455,7 +492,7 @@ position, which the rich renderer uses to anchor in-place edits."
     (nreverse (delq nil events))))
 
 (defun orgzly-data--book-buffer (book)
-  "A live org-mode buffer visiting BOOK's file."
+  "A live `org-mode' buffer visiting BOOK's file."
   (let ((file (orgzly-data-book-file book)))
     (unless (file-exists-p file)
       (error "No book %s" book))
@@ -463,6 +500,7 @@ position, which the rich renderer uses to anchor in-place edits."
 
 (defun orgzly-data--file-entries (file)
   "All entries of FILE, memoised on its mtime."
+  (orgzly-data-check-file file)
   (let* ((mtime (float-time (file-attribute-modification-time
                              (file-attributes file))))
          (hit (gethash file orgzly-data--cache)))
@@ -477,6 +515,8 @@ position, which the rich renderer uses to anchor in-place edits."
                    (unless (org-at-heading-p)
                      (outline-next-heading))
                    (while (not (eobp))
+                     (when (>= (length acc) orgzly-data-max-entries)
+                       (error "Too many headings in notebook"))
                      (push (orgzly-data--entry-at-point book file) acc)
                      (outline-next-heading))
                    (nreverse acc))))))
@@ -510,7 +550,7 @@ each buffer for state cycling."
                 (t (push k todo))))
         ;; No "|" separator: last keyword is the done state.
         (unless in-done
-          (when-let ((last (car todo)))
+          (when-let* ((last (car todo)))
             (setq todo (cdr todo))
             (push last done)))))
     (cons (nreverse todo) (nreverse done))))
@@ -526,43 +566,36 @@ each buffer for state cycling."
 ;; ─── Locating a note from a wire ref ─────────────────────────────────────────
 
 (defun orgzly-data--goto-ref (ref)
-  "Move point (in the right buffer) to the heading REF names.
-REF is an alist with `file' and `pos', optionally `title' for
-verification; returns the buffer. Positions can drift after edits: when
-the heading at pos doesn't match the expected title, fall back to
-searching the file for it."
-  (let* ((file (alist-get 'file ref))
+  "Resolve internal REF exactly; never guess among duplicate titles."
+  (let* ((file (orgzly-data-check-file (alist-get 'file ref)))
          (pos (alist-get 'pos ref))
          (title (alist-get 'title ref))
          (buf (find-file-noselect file)))
     (with-current-buffer buf
-      (org-with-wide-buffer nil)
       (widen)
-      (goto-char (min (max (or pos 1) 1) (point-max)))
-      (unless (org-at-heading-p) (ignore-errors (org-back-to-heading t)))
-      (when (and title
-                 (not (equal title (nth 4 (ignore-errors
-                                            (org-heading-components))))))
-        (goto-char (point-min))
-        (let ((found nil))
-          (while (and (not found) (re-search-forward org-outline-regexp-bol nil t))
-            (when (equal title (nth 4 (org-heading-components)))
-              (setq found t)))
-          (unless found (error "Note \"%s\" not found in %s" title file))
-          (beginning-of-line))))
+      (unless (and (integerp pos) (<= (point-min) pos (point-max)))
+        (error "Stale note position"))
+      (goto-char pos)
+      (unless (and (org-at-heading-p)
+                   (or (null title) (equal title (nth 4 (org-heading-components)))))
+        (error "Stale note identity")))
     buf))
+
+(defvar orgzly-data--transaction nil
+  "Non-nil while an outer atomic save owns a compound note edit.")
 
 (defmacro orgzly-data--with-ref (ref &rest body)
   "Run BODY with point on REF's heading, then save and invalidate."
   (declare (indent 1))
   `(let ((buf (orgzly-data--goto-ref ,ref)))
      (with-current-buffer buf
-       (prog1 (save-excursion ,@body)
-         (save-buffer)
-         (orgzly-data-invalidate)))))
+       (atomic-change-group
+         (prog1 (save-excursion ,@body)
+           (unless orgzly-data--transaction (save-buffer))
+           (orgzly-data-invalidate))))))
 
 (defun orgzly-data-entry-ref (entry)
-  "The wire ref (file/pos/title) of ENTRY, for embedding in actions."
+  "Return the internal position reference of ENTRY; never send it on the wire."
   `((file . ,(alist-get 'file entry))
     (pos . ,(alist-get 'pos entry))
     (title . ,(alist-get 'title entry))))
@@ -592,7 +625,7 @@ searching the file for it."
 (defun orgzly-data--format-ts (parts &optional inactive)
   "Canonical timestamp assembled from the PARTS alist.
 PARTS holds strings under `date' (required, \"2026-07-20\"), `time'
-(\"14:00\"), `end' (\"15:30\", only with time), `repeater' (\"+1w\"),
+For example \"14:00\", `end' (\"15:30\", only with time), `repeater' (\"+1w\"),
 `warning' (\"-2d\").  INACTIVE brackets it [so] instead of <so>."
   (let* ((date (alist-get 'date parts))
          (time (alist-get 'time parts))
@@ -603,8 +636,8 @@ PARTS holds strings under `date' (required, \"2026-07-20\"), `time'
                            (string-to-number (substring date 0 4)))))
     (concat (if inactive "[" "<") (format-time-string "%Y-%m-%d %a" day)
             (and time (concat " " time (and end (concat "-" end))))
-            (when-let ((r (alist-get 'repeater parts))) (concat " " r))
-            (when-let ((w (alist-get 'warning parts))) (concat " " w))
+            (when-let* ((r (alist-get 'repeater parts))) (concat " " r))
+            (when-let* ((w (alist-get 'warning parts))) (concat " " w))
             (if inactive "]" ">"))))
 
 (defun orgzly-data-set-planning (ref kind parts)
@@ -640,7 +673,7 @@ them) — so the stamp they insert is rewritten whole from PARTS."
                            t t nil 1)))))))
 
 (defun orgzly-data-set-content (ref content)
-  "Replace REF's content (text between metadata and next heading)."
+  "Replace REF's body with CONTENT, between metadata and the next heading."
   (orgzly-data--with-ref ref
     (org-back-to-heading t)
     (forward-line 1)
@@ -803,7 +836,7 @@ No-op while one is already running there (Orgzly's clockIn)."
 (defun orgzly-data-clock-out (ref)
   "Close REF's running clock, appending the end time and duration."
   (orgzly-data--with-ref ref
-    (when-let ((pos (orgzly-data--open-clock-pos)))
+    (when-let* ((pos (orgzly-data--open-clock-pos)))
       (goto-char pos)
       (re-search-forward org-ts-regexp-inactive (line-end-position))
       (let* ((start (org-time-string-to-time (match-string 0)))
@@ -817,7 +850,7 @@ No-op while one is already running there (Orgzly's clockIn)."
 (defun orgzly-data-clock-cancel (ref)
   "Remove REF's running clock line; drop the drawer if it ends up empty."
   (orgzly-data--with-ref ref
-    (when-let ((pos (orgzly-data--open-clock-pos)))
+    (when-let* ((pos (orgzly-data--open-clock-pos)))
       (goto-char pos)
       (delete-region (line-beginning-position)
                      (min (point-max) (1+ (line-end-position))))
@@ -863,7 +896,7 @@ through `org-todo' (a repeating task reschedules instead of closing)."
                                      sibling before)
   "Create a note in BOOK titled TITLE; returns its ref.
 STATE/PRIORITY/TAGS/SCHEDULED/DEADLINE/CONTENT seed the metadata
-(strings; SCHEDULED/DEADLINE are org date strings).  UNDER, when
+Values are strings; SCHEDULED/DEADLINE are org date strings).  UNDER, when
 non-nil, is a parent ref the note is created beneath; SIBLING a ref
 the note is created next to at the same level — after its subtree, or
 directly above it when BEFORE (Orgzly's new above/under/below).
@@ -924,7 +957,7 @@ new-note settings (`orgzly-new-note-state', created-at property)."
              (insert (string-trim-right content) "\n"))
            (goto-char beg)
            (prog1 `((file . ,file) (pos . ,(point)) (title . ,title))
-             (save-buffer)
+             (unless orgzly-data--transaction (save-buffer))
              (orgzly-data-invalidate))))))))
 
 (provide 'orgzly-data)

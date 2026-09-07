@@ -2,6 +2,7 @@
 
 ;; Copyright (C) 2026 calebc42 and contributors
 ;; SPDX-License-Identifier: GPL-3.0-or-later
+;; Package-Requires: ((emacs "30.1"))
 
 ;; A faithful port of Orgzly Revived's dotted search language
 ;; (QueryTokenizer/QueryParser/DottedQueryParser/SqliteQueryBuilder) that
@@ -28,6 +29,10 @@
 ;; Known deliberate divergence from upstream (documented in docs/PARITY.md):
 ;; upstream's `ne' relation compiles to an unsatisfiable SQL AND; here it
 ;; means "outside the period", the evident intent.
+
+;;; Commentary:
+
+;; Recovered Orgzly domain logic; current presentation lives in orgzly-ui.el.
 
 ;;; Code:
 
@@ -160,7 +165,7 @@ match is ignored exactly as upstream ignores it."
 
 (defvar orgzly-query--tokens nil "Remaining token list while parsing.")
 (defvar orgzly-query--orders nil "Sort orders collected while parsing.")
-(defvar orgzly-query--agenda-days nil "ad.N option collected while parsing.")
+(defvar orgzly-query--agenda-days nil "Agenda ad.N option collected while parsing.")
 
 (defun orgzly-query-parse (str)
   "Parse dotted query STR into (:cond COND :orders ORDERS :agenda-days N)."
@@ -236,13 +241,13 @@ inside OR regrouping (AND binds tighter than OR)."
 (defun orgzly-query--boundary (interval &optional plus-one now)
   "Float-time boundary for INTERVAL (UNIT . VALUE), truncated per unit.
 PLUS-ONE returns the exclusive end of the unit period instead (mirrors
-TimeUtils.timeFromNow with addOneMore). NOW overrides the current time
+TimeUtils.timeFromNow with addOneMore).  NOW overrides the current time
 for tests."
   (let* ((now (or now (current-time)))
          (unit (car interval))
          (value (cdr interval))
          (d (decode-time now))
-         (sec (nth 0 d)) (min (nth 1 d)) (hour (nth 2 d))
+         (_sec (nth 0 d)) (_min (nth 1 d)) (hour (nth 2 d))
          (day (nth 3 d)) (mon (nth 4 d)) (year (nth 5 d)))
     (pcase unit
       ('now (+ (float-time now) (if plus-one 0.001 0)))
@@ -256,10 +261,10 @@ for tests."
                (encode-time 0 0 0 (if plus-one 2 1) (+ mon value) year)))
       ('year (float-time
               (encode-time 0 0 0 (if plus-one 2 1) 1 (+ year value))))
-      (_ (error "orgzly-query: no boundary for unit %s" unit)))))
+      (_ (error "Orgzly query: no boundary for unit %s" unit)))))
 
 (defun orgzly-query--time-in-relation-p (ts rel interval now)
-  "Non-nil when float-time TS satisfies REL against INTERVAL at NOW.
+  "Non-nil when timestamp TS satisfies REL against INTERVAL at NOW.
 TS nil means the entry has no such timestamp."
   (if (eq (car interval) 'none)
       (null ts)
@@ -280,7 +285,7 @@ TS nil means the entry has no such timestamp."
   "Match EVENTS ((START END HAS-TIME) triples) against REL/INTERVAL at NOW.
 Upstream expands one row per event, so a note matches when ANY single
 event satisfies the relation; `gt'/`ge' compare the event's end
-(event_end_timestamp), the rest its start."
+The event_end_timestamp, the rest its start."
   (if (eq (car interval) 'none)
       (null events)
     (and (cl-some (lambda (ev)
@@ -308,7 +313,7 @@ event satisfies the relation; `gt'/`ge' compare the event's end
 END falls back to START when the stamp has no time range — upstream's
 event_end_timestamp COALESCE."
   (delq nil (mapcar (lambda (ts)
-                      (when-let ((start (alist-get 'time ts)))
+                      (when-let* ((start (alist-get 'time ts)))
                         (list start
                               (or (alist-get 'end-time ts) start)
                               (alist-get 'has-time ts))))
@@ -317,7 +322,7 @@ event_end_timestamp COALESCE."
 ;; ─── Matcher ─────────────────────────────────────────────────────────────────
 
 (defun orgzly-query--substring-p (needle haystack)
-  "Case-insensitive substring test, nil-safe on HAYSTACK."
+  "Test NEEDLE as a case-insensitive substring, nil-safe on HAYSTACK."
   (and haystack
        (let ((case-fold-search t))
          (string-match-p (regexp-quote needle) haystack))))
@@ -325,7 +330,7 @@ event_end_timestamp COALESCE."
 (cl-defun orgzly-query-context (&key now todo-keywords done-keywords
                                      default-priority)
   "Build a matcher context.
-NOW is a time value (default: current time). TODO-KEYWORDS and
+NOW is a time value (default: current time).  TODO-KEYWORDS and
 DONE-KEYWORDS classify states for it.todo / it.done; DEFAULT-PRIORITY
 backs p. matching on notes with no explicit priority."
   (list (cons 'now (or now (current-time)))
@@ -375,7 +380,7 @@ A nil COND matches everything."
            (orgzly-query--substring-p str (alist-get 'content entry))
            (orgzly-query--substring-p
             str (string-join (alist-get 'tags entry) " "))))
-      (_ (error "orgzly-query: unknown condition %S" cond)))))
+      (_ (error "Orgzly query: unknown condition %S" cond)))))
 
 ;; ─── Condition inspection (for default sort and agenda) ─────────────────────
 
@@ -390,13 +395,13 @@ A nil COND matches everything."
 ;; ─── Sorting ─────────────────────────────────────────────────────────────────
 
 (defun orgzly-query--state-rank (state ctx)
-  "Rank of STATE in the configured keyword order (todo then done)."
+  "Rank STATE in CTX's configured keyword order (todo then done)."
   (let ((seq (append (alist-get 'todo ctx) (alist-get 'done ctx))))
     (or (cl-position state seq :test #'equal)
         (if state (length seq) (1+ (length seq))))))
 
 (defun orgzly-query--time-sort-value (time has-time)
-  "Composite time sort value: (DAY . WITHIN-DAY-RANK).
+  "Sort TIME and HAS-TIME as (DAY . WITHIN-DAY-RANK).
 Upstream orders time keys by start-of-day with a `hour IS NULL'
 tiebreak, so on the same day timed entries come before all-day ones —
 in BOTH directions: the day honours the sort direction, the rank
@@ -406,7 +411,7 @@ always compares ascending."
     (cons day (if has-time (- time day) 86400.0))))
 
 (defun orgzly-query--sort-value (entry key desc ctx)
-  "Comparable value of ENTRY under sort KEY toward direction DESC."
+  "Compare ENTRY under sort KEY toward direction DESC in CTX."
   (pcase key
     ('book (or (alist-get 'book entry) ""))
     ('title (or (alist-get 'title entry) ""))
@@ -419,13 +424,13 @@ always compares ascending."
     ('state (orgzly-query--state-rank (alist-get 'state entry) ctx))
     ('position (alist-get 'pos entry))
     ;; Upstream: MIN(event) ascending, MAX(event) descending.
-    ('event (when-let ((evs (orgzly-query--entry-events entry)))
+    ('event (when-let* ((evs (orgzly-query--entry-events entry)))
               (let ((pick (car (sort (copy-sequence evs)
                                      (lambda (a b)
                                        (if desc (> (car a) (car b))
                                          (< (car a) (car b))))))))
                 (orgzly-query--time-sort-value (nth 0 pick) (nth 2 pick)))))
-    (_ (when-let ((ts (alist-get key entry)))
+    (_ (when-let* ((ts (alist-get key entry)))
          (orgzly-query--time-sort-value (alist-get 'time ts)
                                         (alist-get 'has-time ts))))))
 
@@ -450,7 +455,7 @@ direction-invariant tiebreak.  Returns `lt', `gt', or `eq'."
               (t 'eq))))))
 
 (defun orgzly-query-sort (entries query ctx)
-  "Sort ENTRIES per QUERY's o.* orders (or Orgzly's defaults).
+  "Sort ENTRIES in CTX per QUERY's o.* orders (or Orgzly's defaults).
 Defaults mirror upstream: book then position; a query using s./d.
 conditions gets scheduled/deadline time prepended."
   (let* ((orders (plist-get query :orders))

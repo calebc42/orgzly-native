@@ -1,124 +1,75 @@
-# orgzly-native — Orgzly Revived, entirely in elisp
+# Orgzly Native
 
-Orgzly Revived rebuilt as a [Jetpacs](jetpacs/README.md) Tier 1:
-**zero Kotlin**. The Android side is the stock app-agnostic jetpacs
-companion (vendored under `jetpacs/`); every screen, the dotted query
-language, the agenda, reminders, the home-screen widget, and every
-mutation are elisp — and your org files on disk are the database.
+Orgzly's notebook, outline, search, agenda and note-editing workflows as an
+optional Elisp applet for the current Jetpacs POC. Org files remain the database.
+Presentation uses Jetpacs Compose Foundation components and the declarative
+Styles API, with light and dark palettes based on
+[Orgzly Revived's Android resources](https://github.com/orgzly-revived/orgzly-android-revived).
 
-Feature coverage against
-[orgzly-android-revived](https://github.com/orgzly-revived/orgzly-android-revived)
-is tracked line-by-line in [docs/PARITY.md](docs/PARITY.md).
+The original Git history is preserved through `9a28575`. The old bundled core,
+generated single-file distribution and deployment scripts have been retired.
+Historical UI and tests are in `legacy/`, excluded from the live load path and APK.
+See [restoration provenance](docs/RESTORATION.md) and [current coverage](docs/PARITY.md).
 
-## What you get
+## Local setup
 
-- **Books** — notebooks are `.org` files in `orgzly-directory`:
-  create/rename/delete, preface editing, a default notebook for capture,
-  and Orgzly's Getting Started tutorial book one tap away.
-- **Notes** — Orgzly's outline, faithfully: flat foldable rows with
-  red/green state keywords, icon-led planning lines, inline content
-  previews, faded done notes; swipe or long-press for the quick-action
-  popup; a note editor with breadcrumbs, inline title, icon metadata
-  rows with ×-clear, the timestamp dialog (date + time + end + repeater
-  + warning), tags, properties; every structure op and Orgzly's
-  multi-select batch toolbar.
-- **Rich content** — note bodies render as native styled text, no
-  view/edit mode: tap a block to edit it in place, toggle checkboxes,
-  tap links; org tables are native grids (cell tap-to-edit,
-  formula-aware, row/column ops, Emacs-side #+TBLFM recalculation); src
-  blocks run via org-babel (confirm + timeout guardrails) with
-  #+RESULTS folding read-only.
-- **Search** — Orgzly's dotted query language, ported faithfully
-  (`b.gtd i.todo t.work s.ge.today .it.done o.p ad.7`, quoting, parens,
-  and/or), plus the four seeded saved searches with full management.
-- **Agenda** — day-bucketed saved searches with repeater expansion and
-  overdue-into-today grouping.
-- **Reminders** — exact alarms for scheduled/deadline/event times with
-  per-class toggles and a daily time for date-only notes; persisted
-  across reboots by the companion.
-- **Widget & capture** — a saved-search home-screen widget with
-  todo-cycle buttons; share-sheet text lands in the default notebook.
-- **Navigation** — Orgzly's drawer: every saved search and every
-  notebook one tap away, with the current one highlighted.
-- **Settings** — Orgzly's preference screens as a schema-driven,
-  Customize-persisted settings view, including the Display prefs
-  (content in lists, planning times, book name in results).
+Keep these sibling checkouts under the same workspace:
 
-## Layout
+```text
+workspace/
+  jetpacs-poc/
+    jetpacs-components/
+  ebp.el/
+  orgzly-native/
+```
 
-- `orgzly.el` — the single-file bundle, generated (do not edit by hand)
-- `jetpacs/` — the vendored Jetpacs foundation (protocol, elisp core,
-  Android companion). Untouched by this app.
-- `emacs/apps/orgzly/` — the app: `orgzly-query.el` (query language),
-  `orgzly-data.el` (file-backed data layer), `orgzly-ui.el`
-  (books/notes/editor views), `orgzly-agenda.el`, `orgzly-search.el`,
-  `orgzly-reminders.el`, `orgzly-widget.el`, `orgzly-capture.el`,
-  `orgzly-settings.el`, and the `orgzly.el` entry point.
-- `emacs/build-bundle.el` — regenerates the root `orgzly.el` (app-only;
-  the bundle opens with `(require 'jetpacs-core)`)
-- `deploy.sh` / `deploy.ps1` — rebuild the bundle and push it to a
-  connected device over adb (see Getting started).
-- `test/` — 94 ERT tests, including a jetpacs-lint pass over every view.
-- `docs/PARITY.md` — the feature matrix and deliberate divergences.
-
-## Getting started
-
-First, build and install the companion APK from `jetpacs/` and pair it
-(see [jetpacs/README.md](jetpacs/README.md) — the companion listens,
-Emacs dials in). Then load the app in the Emacs the companion talks to,
-by any of the three routes below. All of them need the Jetpacs core
-first — the bundle `require`s it, never copies it, so one installed
-`jetpacs-core.el` serves every Jetpacs app.
-
-**Single-file bundle.** Grab `orgzly.el` from this repo's root and
-`jetpacs-core.el` from the jetpacs repo's root, put both somewhere on
-`load-path`, and:
+With the current Jetpacs runtime and components already on `load-path`:
 
 ```elisp
-(require 'jetpacs-core)
+(add-to-list 'load-path "~/workspace/orgzly-native/emacs/apps/orgzly")
+(setq orgzly-directory "~/org") ; Direct .org files; no recursive scanning.
 (require 'orgzly)
-(setq orgzly-directory "~/org")   ; where your notebooks live
-M-x jetpacs-connect
+(orgzly)
 ```
 
-**On the phone (/sdcard adoption).** If your device init is the Jetpacs
-starter init (`jetpacs/docs/starter-init.el`), just download `orgzly.el`
-on the phone — the browser saves to `/sdcard/Download`, or copy it to
-`/sdcard/Documents` — then add `"orgzly.el"` to the starter init's
-bundle adopt list and `(require 'orgzly)` after the core. On startup the
-newest staged copy is adopted into `~/.emacs.d/elisp/` automatically;
-updating the app is just downloading the file again.
+The Companion must enable its experimental Foundation/design renderer support.
+Orgzly declares `jetpacs.components` and `jetpacs.design` as required extensions.
+The APK and tablet onboarding payload include it in the optional Apps inventory;
+installing Jetpacs leaves it inactive. Enable Orgzly from Apps after enabling
+Foundation support. No `jetpacs.material3` component package is required.
+The stock Companion still supplies the generic scaffold, insets and dialogs.
+Orgzly's plain toolbar, note rows, fields and controls render through Foundation.
 
-With the device on adb, the deploy scripts do the rebuild + staging in
-one step — `./deploy.sh` from Linux/WSL or `.\deploy.ps1` from Windows
-(the build always runs in WSL Emacs). `--core`/`-Core` also pushes the
-vendored `jetpacs-core.el` (first deploy), `--ssh`/`-Ssh` scp's straight
-into Termux's `~/.emacs.d/elisp/` (no restart-adopt), and
-`--apk`/`-Apk` builds + installs the companion.
+Use Refresh after editing files externally. Unsaved Emacs buffers are preserved
+and must be saved before refreshing or accepting a device edit. Edits use opaque
+revision IDs and are refused when the notebook changes. Forms capture their
+fields together and save once before returning `accepted`.
 
-**From source.** Point `load-path` at the checkout:
+Search accepts dotted queries such as `i.todo`, `t.work`, `b.inbox`, `s.today`,
+boolean expressions and sort orders. `ad.N` produces agenda sections, bounded to
+31 days. Outline/search pages contain 40 notes; agenda shows the first 40
+occurrences. The supported envelope is 64 local notebooks, 1 MiB each, with
+2,000 total headings. Symlink notebook aliases and path traversal are refused.
 
-```elisp
-(add-to-list 'load-path "~/src/orgzly-native/jetpacs/emacs/core")
-(add-to-list 'load-path "~/src/orgzly-native/emacs/apps/orgzly")
-(require 'orgzly)
-(setq orgzly-directory "~/org")
-M-x jetpacs-connect
-```
+Appearance starts with Orgzly Light or Dark. A Design Lab profile derived from
+Orgzly can override it; unrelated global profiles do not remove required styles.
+`M-x customize-group RET orgzly` configures the Org defaults. Unloading the
+feature calls `orgzly-unregister` and removes its registrations and pending timers.
 
-Development is live: `eval-buffer` against a connected phone updates
-the app in place. After editing sources, regenerate the bundle:
+## Verification
 
 ```sh
-emacs --batch -l emacs/build-bundle.el   # rewrites orgzly.el
+./test/run-tests.sh
 ```
 
-## Tests
+This runs the recovered model/query/agenda tests, current applet contract tests,
+and warning-as-error compilation into a temporary directory. No source `.elc`
+files are produced. All file mutation tests use disposable notebooks.
 
-```sh
-./test/run-tests.sh          # emacs --batch + ERT, no device needed
-```
+`test/verify-applet.sh` runs static inspect/manifest/validation and the trusted
+render checker on those same disposable fixtures. Reports and generated screen
+JSON go to a caller-selected temporary output directory. The Companion's
+`OrgzlyPresentedScreenTest` renders these screens on a device, checks note and fold
+actions, and captures light/dark images. See [verification](docs/VERIFICATION.md).
 
-## License
-
-GPL-3.0-or-later, matching the Jetpacs foundation it builds on.
+GPL-3.0-or-later; see [LICENSE](LICENSE).
