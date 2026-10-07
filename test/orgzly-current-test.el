@@ -158,6 +158,30 @@ the document carries the visible page; a tap folds in place or opens."
           (should (member (alist-get 'id parent) orgzly-state-folded))
           (should (< (length (plist-get (orgzly-ui-document) :rows)) (length rows)))
           (should (equal before (orgzly-state-revision (alist-get 'file parent)))))
+        ;; The fold is synced as a per-element patch: one icon set and one
+        ;; removal per hidden row, which turn the old rows into the new.
+        (let* ((parent (nth 1 entries))
+               (orgzly-state-folded nil)
+               (hidden (- (length (orgzly-state-visible entries))
+                          (let ((orgzly-state-folded (list (alist-get 'id parent))))
+                            (length (orgzly-state-visible entries)))))
+               (old (orgzly-ui-outline-rows "gtd"))
+               synced)
+          (cl-letf (((symbol-function 'orgzly--later) #'funcall)
+                    ((symbol-function 'jetpacs-shell-data-sync)
+                     (lambda (surface path new &rest _) (setq synced (list surface path new)))))
+            (should (eq 'accepted (orgzly--on-note-tap (list :item (alist-get 'id parent)) nil))))
+          (should (equal (seq-take synced 2) '("orgzly" "/rows")))
+          (let ((ops (jetpacs-data-array-ops "/rows" old (nth 2 synced))))
+            (should (> hidden 0))
+            (should (= (1+ hidden) (length ops)))
+            (should (= hidden (cl-count "remove" ops :key (lambda (op) (plist-get op :op))
+                                        :test #'equal)))
+            (should (cl-find "/rows/1/icon" ops :key (lambda (op) (plist-get op :path))
+                             :test #'equal))
+            (should (equal (jetpacs-node->canonical-json (list :rows (nth 2 synced)))
+                           (jetpacs-node->canonical-json
+                            (jetpacs-data-apply-ops (list :rows old) ops))))))
         ;; An unknown item is stale, not an error.
         (should (eq 'stale (orgzly--on-note-tap '(:item "oz-unknown") nil)))))))
 

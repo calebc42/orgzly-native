@@ -138,12 +138,15 @@ no id of its own and the Companion injects the item's key as `:item'."
   "Present the outline after a change: patch `/rows' when SHAPE still holds.
 SHAPE is `orgzly--outline-shape' from before the change.  Bindings
 change values, never the tree: while the pager and the empty notice are
-as they were, one `surface.data' patch re-expands the rows (SPEC
-13.8.5); otherwise the screen is re-pushed whole."
+as they were, the rows are synced in place (SPEC 13.8.5): the shell
+diffs them by note id against the rows it last sent and patches only the
+changed icon and the rows that left or entered (`insert', amendment
+#196), or sets `/rows' when that is smaller; otherwise the screen is
+re-pushed whole."
   (if (equal shape (orgzly--outline-shape))
       (let ((rows (orgzly-ui-outline-rows orgzly-state-outline)))
         (orgzly--later
-         (lambda () (jetpacs-shell-data-patch "orgzly" (list (jetpacs-data-set "/rows" rows))))))
+         (lambda () (jetpacs-shell-data-sync "orgzly" "/rows" rows :key "id"))))
     (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))))
 
 (defun orgzly--toggle-fold (id)
