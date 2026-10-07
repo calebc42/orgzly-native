@@ -44,18 +44,23 @@
                     ("Search" . "search") ("Settings" . "settings")))
           '(:scroll t :spacing 4))))
 
+(defun orgzly-ui--metadata (entry show-book)
+  "Return ENTRY's planning caption; SHOW-BOOK prefixes its notebook name."
+  (string-join
+   (delq nil
+         (list (and show-book (alist-get 'book entry))
+               (when (alist-get 'scheduled entry)
+                 (concat "◷ " (alist-get 'raw (alist-get 'scheduled entry))))
+               (when (alist-get 'deadline entry)
+                 (concat "⚑ " (alist-get 'raw (alist-get 'deadline entry))))))
+   "   "))
+
 (defun orgzly-ui-note-row (entry &optional show-book)
   "Build ENTRY's compact outline row; SHOW-BOOK adds its notebook name."
   (let* ((id (alist-get 'id entry)) (state (alist-get 'state entry))
          (done (member state (alist-get 'done (plist-get orgzly-state :ctx))))
          (level (min 8 (max 0 (1- (alist-get 'level entry)))))
-         (metadata (string-join
-                    (delq nil
-                          (list (and show-book (alist-get 'book entry))
-                                (when (alist-get 'scheduled entry)
-                                  (concat "◷ " (alist-get 'raw (alist-get 'scheduled entry))))
-                                (when (alist-get 'deadline entry)
-                                  (concat "⚑ " (alist-get 'raw (alist-get 'deadline entry)))))) "   "))
+         (metadata (orgzly-ui--metadata entry show-book))
          (spans (append
                  (when state (list (jetpacs-span (concat state " ") :font-weight "bold"
                                                 :color (if done "success" "error"))))
@@ -94,20 +99,102 @@
       (jetpacs-divider))
      :key id)))
 
+(defun orgzly-ui-note-row-template ()
+  "Build the one outline row the Companion expands per `/rows' item.
+SPEC 13.8.5: every varying value is a relative `jetpacs-ref' into the
+item `orgzly-ui-outline-row' builds, and the shape never varies, so a
+fold, a page turn or an insert is one `surface.data' patch of `/rows'
+instead of a screen rebuild.  The tap handlers read the item's id from
+the injected `item' argument.  The inline content preview of
+`orgzly-ui-note-row' has no fixed-shape form and is not shown here."
+  (jetpacs-template "/rows"
+    (jetpacs-with-attrs
+     (jetpacs-column
+      (jetpacs-row
+       (jetpacs-spacer :width (jetpacs-ref "indent"))
+       (jetpacs-with-attrs
+        (jetpacs-design-pressable
+         (jetpacs-ref "styles")
+         (orgzly-ui-action "orgzly.note.open")
+         (list (jetpacs-column
+                (jetpacs-row
+                 (jetpacs-text (jetpacs-ref "state") :font-weight "bold"
+                               :color (jetpacs-ref "state_color"))
+                 (jetpacs-text (jetpacs-ref "priority") :font-weight "bold")
+                 (jetpacs-text (jetpacs-ref "title"))
+                 (jetpacs-text (jetpacs-ref "tags") :color "secondary")
+                 :spacing 4)
+                (jetpacs-text (jetpacs-ref "metadata") :style "caption" :color "secondary")
+                :spacing 2)))
+        :weight 1)
+       (jetpacs-icon-button (jetpacs-ref "icon") (orgzly-ui-action "orgzly.note.tap")
+                            :content-description (jetpacs-ref "icon_label"))
+       :align "center")
+      (jetpacs-divider))
+     :key (jetpacs-ref "id"))))
+
+(defun orgzly-ui-outline-row (entry)
+  "Return ENTRY's `/rows' item: the values `orgzly-ui-note-row-template' binds."
+  (let* ((id (alist-get 'id entry)) (state (alist-get 'state entry))
+         (done (member state (alist-get 'done (plist-get orgzly-state :ctx))))
+         (level (min 8 (max 0 (1- (alist-get 'level entry)))))
+         (children (alist-get 'has-children entry))
+         (row (make-hash-table :test #'equal :size 12)))
+    (puthash "id" id row)
+    (puthash "indent" (* 12 level) row)
+    (puthash "styles" (if done ["orgzly.row" "orgzly.done"] ["orgzly.row"]) row)
+    (puthash "state" (if state (concat state " ") "") row)
+    (puthash "state_color" (if done "success" "error") row)
+    (puthash "priority" (if-let* ((priority (alist-get 'priority entry)))
+                            (format "[#%s] " priority) "")
+             row)
+    (puthash "title" (alist-get 'title entry) row)
+    (puthash "tags" (if (alist-get 'tags entry)
+                        (format "  :%s:" (string-join (alist-get 'tags entry) ":")) "")
+             row)
+    (puthash "metadata" (orgzly-ui--metadata entry nil) row)
+    (puthash "icon" (if children
+                        (if (member id orgzly-state-folded) "chevron_right" "expand_more")
+                      "more_vert")
+             row)
+    (puthash "icon_label" (if children "Fold or unfold note" "Note actions") row)
+    row))
+
+(defun orgzly-ui-page-window (count)
+  "Return (PAGE START END) of the active page over COUNT entries."
+  (let* ((page (min orgzly-state-page (max 0 (/ (1- count) orgzly-state-page-size))))
+         (start (* page orgzly-state-page-size)))
+    (list page start (min count (+ start orgzly-state-page-size)))))
+
+(defun orgzly-ui-pager (count)
+  "Return the Previous/Next row when COUNT exceeds one page, else nil."
+  (pcase-let ((`(,page ,start ,end) (orgzly-ui-page-window count)))
+    (when (> count orgzly-state-page-size)
+      (jetpacs-row
+       (jetpacs-button "Previous" (orgzly-ui-action "orgzly.page" (list :page (max 0 (1- page)))))
+       (jetpacs-text (format "%d–%d of %d" (1+ start) end count) :style "caption")
+       (jetpacs-button "Next" (orgzly-ui-action "orgzly.page" (list :page (1+ page))))
+       :spacing 8 :align "center"))))
+
 (defun orgzly-ui-page (entries &optional show-book)
   "Return bounded page nodes for ENTRIES, optionally showing SHOW-BOOK."
-  (let* ((count (length entries))
-         (page (min orgzly-state-page (max 0 (/ (1- count) orgzly-state-page-size))))
-         (start (* page orgzly-state-page-size))
-         (end (min count (+ start orgzly-state-page-size))))
+  (pcase-let ((`(,_ ,start ,end) (orgzly-ui-page-window (length entries))))
     (append
      (mapcar (lambda (entry) (orgzly-ui-note-row entry show-book)) (cl-subseq entries start end))
-     (when (> count orgzly-state-page-size)
-       (list (jetpacs-row
-              (jetpacs-button "Previous" (orgzly-ui-action "orgzly.page" (list :page (max 0 (1- page)))))
-              (jetpacs-text (format "%d–%d of %d" (1+ start) end count) :style "caption")
-              (jetpacs-button "Next" (orgzly-ui-action "orgzly.page" (list :page (1+ page))))
-              :spacing 8 :align "center"))))))
+     (when-let* ((pager (orgzly-ui-pager (length entries)))) (list pager)))))
+
+(defun orgzly-ui-outline-rows (name)
+  "Return the `/rows' array for NAME's visible outline at the active page."
+  (let ((entries (orgzly-state-visible (orgzly-state-entries name))))
+    (pcase-let ((`(,_ ,start ,end) (orgzly-ui-page-window (length entries))))
+      (vconcat (mapcar #'orgzly-ui-outline-row (cl-subseq entries start end))))))
+
+(defun orgzly-ui-document ()
+  "Return the surface data document (SPEC 13.8): the open outline's rows.
+A deterministic reader of the snapshot and the fold state, like every
+builder; `orgzly-state-outline' names the notebook whose outline screen
+is on the stack, or nil for an empty array."
+  (list :rows (if orgzly-state-outline (orgzly-ui-outline-rows orgzly-state-outline) [])))
 
 (defun orgzly-ui-books ()
   "Return the notebook list from the published snapshot."
@@ -137,7 +224,14 @@
               (jetpacs-button "Notebook details"
                                (orgzly-ui-action "orgzly.book.edit" (list :id (alist-get 'id book))) :variant "text")
               :scroll t :spacing 8))
-       (orgzly-ui-page (orgzly-state-visible (orgzly-state-entries name)))
+       ;; The rows are a template over the document (SPEC 13.8.5); the
+       ;; document carries this page of the visible outline.
+       (list (jetpacs-with-attrs
+              (jetpacs-lazy-column (orgzly-ui-note-row-template) :spacing 4)
+              :weight 1))
+       (when-let* ((pager (orgzly-ui-pager
+                           (length (orgzly-state-visible (orgzly-state-entries name))))))
+         (list pager))
        (unless (orgzly-state-entries name) (list (jetpacs-text "This notebook is empty.")))))))
 
 (defun orgzly-ui-search ()
@@ -265,10 +359,14 @@
                                                (orgzly-ui-action "orgzly.theme"))
                               (jetpacs-text "Notebook and Org defaults are configured in Emacs through the orgzly Customize group." :style "caption")))
             (_ (list (jetpacs-text "Unknown Orgzly screen.")))))
-         (body (let ((list-node (apply #'jetpacs-lazy-column (append nodes '(:spacing 4)))))
-                 (if (memq kind '(note new-note new-book book-edit save-search settings search))
-                     (jetpacs-with-attrs list-node :padding 16)
-                   list-node))))
+         (body (cond
+                ;; The outline's rows are their own lazy column; the
+                ;; toolbar and pager sit around it in a plain column.
+                ((eq kind 'book) (apply #'jetpacs-column (append nodes '(:spacing 4))))
+                (t (let ((list-node (apply #'jetpacs-lazy-column (append nodes '(:spacing 4)))))
+                     (if (memq kind '(note new-note new-book book-edit save-search settings search))
+                         (jetpacs-with-attrs list-node :padding 16)
+                       list-node))))))
     (let* ((screen (jetpacs-chrome-screen
                     title body :back back :scaffold '(:top-bar-style nil)
                     :actions (list (orgzly-ui-icon "refresh" "Refresh notebooks"

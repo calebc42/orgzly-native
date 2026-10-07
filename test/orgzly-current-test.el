@@ -2,6 +2,7 @@
 ;;; Code:
 (require 'ert)
 (require 'orgzly)
+(require 'jetpacs-data)
 (require 'orgzly-data-test)
 
 (defmacro orgzly-test-with-snapshot (&rest body)
@@ -122,9 +123,43 @@
 
 (ert-deftest orgzly-current-action-payloads-contain-no-paths ()
   (orgzly-test-with-snapshot
-    (let ((json (jetpacs-node->canonical-json (orgzly-ui-screen '(:kind book :book "gtd")))))
-      (should-not (string-match-p (regexp-quote orgzly-directory) json))
-      (should-not (string-match-p "\"pos\":" json)))))
+    (let ((orgzly-state-outline "gtd"))
+      (dolist (json (list (jetpacs-node->canonical-json (orgzly-ui-screen '(:kind book :book "gtd")))
+                          (jetpacs-node->canonical-json (orgzly-ui-document))))
+        (should-not (string-match-p (regexp-quote orgzly-directory) json))
+        (should-not (string-match-p "\"pos\":" json))))))
+
+(ert-deftest orgzly-current-outline-is-a-template-over-the-document ()
+  "SPEC 13.8.5: the outline screen carries one row template over `/rows';
+the document carries the visible page; a tap folds in place or opens."
+  (orgzly-test-with-snapshot
+    (let ((orgzly-state-outline "gtd"))
+      (let* ((screen (orgzly-ui-screen '(:kind book :book "gtd")))
+             (json (jetpacs-node->canonical-json screen))
+             (document (orgzly-ui-document))
+             (entries (orgzly-state-entries "gtd"))
+             (rows (plist-get document :rows)))
+        (should (string-match-p "\"template\"" json))
+        (should (string-match-p "\"children\":\"/rows\"" json))
+        (should (= (length rows) (min orgzly-state-page-size
+                                      (length (orgzly-state-visible entries)))))
+        (should (equal (gethash "title" (aref rows 0)) (alist-get 'title (car entries))))
+        (should (equal (gethash "id" (aref rows 0)) (alist-get 'id (car entries))))
+        ;; Expanded here, as a Companion without the feature receives it,
+        ;; every row's descriptors carry the item key and no template remains.
+        (let* ((expanded (jetpacs-data-materialize screen document :strip t))
+               (ejson (jetpacs-node->canonical-json expanded)))
+          (should-not (string-match-p "\"template\"" ejson))
+          (should (string-match-p (format "\"item\":\"%s\"" (gethash "id" (aref rows 0))) ejson)))
+        ;; A tap on a parent folds it: fewer rows in the document, the file untouched.
+        (let* ((parent (nth 1 entries))
+               (before (orgzly-state-revision (alist-get 'file parent))))
+          (should (eq 'accepted (orgzly--on-note-tap (list :item (alist-get 'id parent)) nil)))
+          (should (member (alist-get 'id parent) orgzly-state-folded))
+          (should (< (length (plist-get (orgzly-ui-document) :rows)) (length rows)))
+          (should (equal before (orgzly-state-revision (alist-get 'file parent)))))
+        ;; An unknown item is stale, not an error.
+        (should (eq 'stale (orgzly--on-note-tap '(:item "oz-unknown") nil)))))))
 
 (ert-deftest orgzly-current-book-create-and-preface ()
   (orgzly-test-with-snapshot

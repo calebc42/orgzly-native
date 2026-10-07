@@ -25,6 +25,11 @@
 (defun orgzly--open (route &optional child)
   "Schedule ROUTE on Orgzly's surface; CHILD retains the current parent screen."
   (setq orgzly-state-page 0)
+  ;; The data document follows the outline screen on the stack.
+  (setq orgzly-state-outline
+        (pcase (plist-get route :kind)
+          ('book (plist-get route :book))
+          (_ (and child orgzly-state-outline))))
   (orgzly--later
    (lambda ()
      (with-jetpacs-owner "orgzly"
@@ -95,10 +100,12 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
        (orgzly--open (list :kind 'book-edit :id (alist-get 'id book)) t)))))
 
 (defun orgzly--on-note-open (args _params)
-  "Open the exact current note identified by ARGS."
+  "Open the exact current note identified by ARGS.
+A literal row names the note in `:id'; a templated outline row carries
+no id of its own and the Companion injects the item's key as `:item'."
   (orgzly--guard
    (lambda ()
-     (let ((entry (orgzly-state-resolve (plist-get args :id) t)))
+     (let ((entry (orgzly-state-resolve (or (plist-get args :id) (plist-get args :item)) t)))
        (unless (alist-get 'pos entry) (error "Expected a note"))
        (orgzly--open (list :kind 'note :id (alist-get 'id entry)) t)))))
 
@@ -121,14 +128,52 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
        (orgzly--open (list :kind 'new-note :book (alist-get 'name book)
                            :book-id (alist-get 'id book) :parent-id (alist-get 'id entry)) t)))))
 
+(defun orgzly--outline-shape ()
+  "Return what decides the outline screen's shape beyond its rows."
+  (let ((count (length (orgzly-state-visible (orgzly-state-entries orgzly-state-outline)))))
+    (list (car (orgzly-ui-page-window count)) (> count orgzly-state-page-size)
+          (null (orgzly-state-entries orgzly-state-outline)))))
+
+(defun orgzly--present-outline (shape)
+  "Present the outline after a change: patch `/rows' when SHAPE still holds.
+SHAPE is `orgzly--outline-shape' from before the change.  Bindings
+change values, never the tree: while the pager and the empty notice are
+as they were, one `surface.data' patch re-expands the rows (SPEC
+13.8.5); otherwise the screen is re-pushed whole."
+  (if (equal shape (orgzly--outline-shape))
+      (let ((rows (orgzly-ui-outline-rows orgzly-state-outline)))
+        (orgzly--later
+         (lambda () (jetpacs-shell-data-patch "orgzly" (list (jetpacs-data-set "/rows" rows))))))
+    (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))))
+
+(defun orgzly--toggle-fold (id)
+  "Toggle the fold of note ID in the explicit fold state."
+  (setq orgzly-state-folded (if (member id orgzly-state-folded)
+                                (delete id orgzly-state-folded) (cons id orgzly-state-folded))))
+
+(defun orgzly--on-note-tap (args _params)
+  "Act on the templated outline row whose item key ARGS carries as `:item'.
+A note with children folds or unfolds, patching the rows in place; a
+leaf opens its note.  The row has one action for every item because a
+template's shape cannot vary per row (SPEC 13.8.5)."
+  (orgzly--guard
+   (lambda ()
+     (let* ((entry (orgzly-state-resolve (plist-get args :item))) (id (alist-get 'id entry)))
+       (unless (alist-get 'pos entry) (error "Expected a note"))
+       (if (not (alist-get 'has-children entry))
+           (orgzly--open (list :kind 'note :id id) t)
+         (let ((shape (orgzly--outline-shape)))
+           (orgzly--toggle-fold id)
+           (orgzly--present-outline shape))
+         'accepted)))))
+
 (defun orgzly--on-fold (args _params)
   "Toggle the snapshot note fold named by ARGS without reading disk."
   (orgzly--guard
    (lambda ()
      (let* ((entry (orgzly-state-resolve (plist-get args :id))) (id (alist-get 'id entry)))
        (unless (alist-get 'pos entry) (error "Expected a note"))
-       (setq orgzly-state-folded (if (member id orgzly-state-folded)
-                                      (delete id orgzly-state-folded) (cons id orgzly-state-folded)))
+       (orgzly--toggle-fold id)
        (orgzly--later (lambda () (jetpacs-shell-push "orgzly"))) 'accepted))))
 
 (defun orgzly--planning (text)
@@ -313,7 +358,8 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
   (orgzly-design-register)
   (with-jetpacs-owner "orgzly"
     (jetpacs-chrome-define-root "orgzly" "books"
-                                (lambda (back) (orgzly-ui-screen '(:kind books) back)) :required t)
+                                (lambda (back) (orgzly-ui-screen '(:kind books) back)) :required t
+                                :data-builder #'orgzly-ui-document)
     (jetpacs-defaction "orgzly.home" #'orgzly--on-home :doc "Refresh and open Orgzly notebooks")
     (jetpacs-defaction "orgzly.open" #'orgzly--on-open :doc "Open an Orgzly destination" :args '((:name view :type "enum" :required t)))
     (jetpacs-defaction "orgzly.refresh" #'orgzly--on-refresh :doc "Refresh the bounded Orgzly notebook snapshot")
@@ -325,6 +371,7 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
     (jetpacs-defaction "orgzly.note.new" #'orgzly--on-note-new :doc "Open a new-note form in the current notebook" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.child" #'orgzly--on-note-child :doc "Open a child-note form under the current note" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.fold" #'orgzly--on-fold :doc "Toggle the current outline note's descendants" :args '((:name id :type "ref" :required t)))
+    (jetpacs-defaction "orgzly.note.tap" #'orgzly--on-note-tap :doc "Fold or unfold the tapped outline note, or open a leaf; the row's item key is injected")
     (jetpacs-defaction "orgzly.note.save" #'orgzly--on-note-save :doc "Commit captured note fields before accepting the edit" :args '((:name id :type "ref") (:name book-id :type "ref") (:name parent-id :type "ref")))
     (jetpacs-defaction "orgzly.note.operate" #'orgzly--on-operate :doc "Commit a closed structural operation to the current note" :args '((:name id :type "ref" :required t) (:name operation :type "enum" :required t)))
     (jetpacs-defaction "orgzly.search.run" #'orgzly--on-search :doc "Run the captured bounded dotted query")
@@ -344,10 +391,10 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
   "Remove Orgzly's registrations, timers, style presets and private state."
   (dolist (timer orgzly--timers) (when (timerp timer) (cancel-timer timer)))
   (setq orgzly--timers nil orgzly-state nil orgzly-state-folded nil
-        orgzly-state-page 0 orgzly-state-query "")
+        orgzly-state-page 0 orgzly-state-query "" orgzly-state-outline nil)
   (orgzly-data-invalidate)
   (dolist (name '("home" "open" "refresh" "book.open" "book.edit" "book.save" "book.delete"
-                  "note.open" "note.new" "note.child" "note.fold" "note.save" "note.operate"
+                  "note.open" "note.new" "note.child" "note.fold" "note.tap" "note.save" "note.operate"
                   "search.run" "search.saved" "search.save" "search.delete" "page" "theme"))
     (jetpacs-undefaction (concat "orgzly." name)))
   (jetpacs-apps-unregister "orgzly") (jetpacs-chrome-remove "orgzly")

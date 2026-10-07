@@ -10,6 +10,9 @@
 
 (defvar orgzly-state nil "The last complete app snapshot; builders only read it.")
 (defvar orgzly-state-folded nil "Opaque note ids whose descendants are folded.")
+(defvar orgzly-state-outline nil
+  "The notebook whose outline screen is on the stack, or nil.
+Its visible rows are the surface data document (SPEC 13.8.5).")
 (defvar orgzly-state-query "" "The active bounded dotted search query.")
 (defvar orgzly-state-dark nil "Non-nil selects the dark Orgzly preset.")
 (defvar orgzly-state-page 0 "Zero-based page in the active outline or search.")
