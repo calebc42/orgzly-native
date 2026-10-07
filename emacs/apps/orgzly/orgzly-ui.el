@@ -99,14 +99,26 @@
       (jetpacs-divider))
      :key id)))
 
+(defun orgzly-ui--row-text (key member &rest options)
+  "A keyed row text bound to MEMBER, shown only while MEMBER is non-empty.
+SPEC 13.8.6: KEY names the sibling; the relative predicate reads the same
+item the text binds, so a note without a state, priority, tags or
+planning line drops that part instead of rendering an empty one."
+  (jetpacs-with-attrs (apply #'jetpacs-text (jetpacs-ref member) options)
+                      :key key
+                      :visible_when (vector (jetpacs-when member "non_empty"))))
+
 (defun orgzly-ui-note-row-template ()
   "Build the one outline row the Companion expands per `/rows' item.
 SPEC 13.8.5: every varying value is a relative `jetpacs-ref' into the
-item `orgzly-ui-outline-row' builds, and the shape never varies, so a
-fold, a page turn or an insert is one `surface.data' patch of `/rows'
-instead of a screen rebuild.  The tap handlers read the item's id from
-the injected `item' argument.  The inline content preview of
-`orgzly-ui-note-row' has no fixed-shape form and is not shown here."
+item `orgzly-ui-outline-row' builds, so a fold, a page turn or an insert
+is one `surface.data' patch of `/rows' instead of a screen rebuild.  SPEC
+13.8.6: the state, priority, tag and planning texts are conditional on
+their member being non-empty, so the shape follows the item without a
+snapshot; their siblings are keyed as that rule requires.  The tap
+handlers read the item's id from the injected `item' argument.  The
+inline content preview of `orgzly-ui-note-row' has no fixed-shape form
+and is not shown here."
   (jetpacs-template "/rows"
     (jetpacs-with-attrs
      (jetpacs-column
@@ -117,14 +129,16 @@ the injected `item' argument.  The inline content preview of
          (jetpacs-ref "styles")
          (orgzly-ui-action "orgzly.note.open")
          (list (jetpacs-column
-                (jetpacs-row
-                 (jetpacs-text (jetpacs-ref "state") :font-weight "bold"
-                               :color (jetpacs-ref "state_color"))
-                 (jetpacs-text (jetpacs-ref "priority") :font-weight "bold")
-                 (jetpacs-text (jetpacs-ref "title"))
-                 (jetpacs-text (jetpacs-ref "tags") :color "secondary")
-                 :spacing 4)
-                (jetpacs-text (jetpacs-ref "metadata") :style "caption" :color "secondary")
+                (jetpacs-with-attrs
+                 (jetpacs-row
+                  (orgzly-ui--row-text "state" "state" :font-weight "bold"
+                                       :color (jetpacs-ref "state_color"))
+                  (orgzly-ui--row-text "priority" "priority" :font-weight "bold")
+                  (jetpacs-with-attrs (jetpacs-text (jetpacs-ref "title")) :key "title")
+                  (orgzly-ui--row-text "tags" "tags" :color "secondary")
+                  :spacing 4)
+                 :key "head")
+                (orgzly-ui--row-text "metadata" "metadata" :style "caption" :color "secondary")
                 :spacing 2)))
         :weight 1)
        (jetpacs-icon-button (jetpacs-ref "icon") (orgzly-ui-action "orgzly.note.tap")
