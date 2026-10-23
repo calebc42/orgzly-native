@@ -2,6 +2,7 @@
 ;;; Code:
 (require 'ert)
 (require 'orgzly)
+(orgzly-register)  ; `require' only loads
 (require 'jetpacs-data)
 (require 'orgzly-data-test)
 
@@ -215,6 +216,22 @@ the document carries the visible page; a tap folds in place or opens."
       (cl-letf (((symbol-function 'orgzly-refresh) (lambda (&rest _) (error "Other book busy"))))
         (should (eq 'accepted (orgzly--on-note-save (list :id (alist-get 'id entry)) (orgzly-test-fields)))))
       (should (equal "Changed title" (alist-get 'title (car (orgzly-data-entries "gtd"))))))))
+
+(ert-deftest orgzly-lifecycle-is-symmetric ()
+  "Loading orgzly.el registers nothing, and orgzly-unregister undoes
+everything orgzly-register did: the trusted launcher's two lifecycle
+checks, run from the foundation's applet tooling."
+  (require 'jetpacs-devtools)
+  (load (expand-file-name "../jetpacs-applet-mcp/jetpacs-applet-tooling.el"
+                          (file-name-directory
+                           (locate-library "jetpacs-surfaces")))
+        nil 'nomessage)
+  (should-not (jetpacs-applet-tooling-load-recording-registrations
+               (locate-library "orgzly.el" t)))
+  (let ((report (jetpacs-applet-tooling-check-lifecycle-symmetry "orgzly")))
+    (should (string-match-p "Status: SYMMETRIC" report))
+    (should (string-match-p "Registered on entry: yes" report)))
+  (should (assoc "orgzly" jetpacs-apps--registry)))
 
 (provide 'orgzly-current-test)
 ;;; orgzly-current-test.el ends here

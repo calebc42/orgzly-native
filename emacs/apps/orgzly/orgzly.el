@@ -4,6 +4,7 @@
 ;;; Commentary:
 ;; Trusted applet entrypoint.  Org files stay in the configured notebook root.
 ;; Navigation is deferred; submitted file effects complete before acceptance.
+;; `require' only loads; the `orgzly' command or the Apps screen registers.
 ;;; Code:
 (require 'orgzly-ui)
 (require 'jetpacs-apps)
@@ -414,6 +415,5 @@ attributed to the owner."
   "Remove Orgzly's live registrations before feature unloading."
   (orgzly-unregister) nil)
 
-(orgzly-register)
 (provide 'orgzly)
 ;;; orgzly.el ends here
