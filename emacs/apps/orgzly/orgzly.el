@@ -391,16 +391,14 @@ template's shape cannot vary per row (SPEC 13.8.5)."
   t)
 
 (defun orgzly-unregister ()
-  "Remove Orgzly's registrations, timers, style presets and private state."
+  "Remove Orgzly's registrations, timers, style presets and private state.
+`jetpacs-apps-unregister' sweeps every action, root and app entry
+attributed to the owner."
   (dolist (timer orgzly--timers) (when (timerp timer) (cancel-timer timer)))
   (setq orgzly--timers nil orgzly-state nil orgzly-state-folded nil
         orgzly-state-page 0 orgzly-state-query "" orgzly-state-outline nil)
   (orgzly-data-invalidate)
-  (dolist (name '("home" "open" "refresh" "book.open" "book.edit" "book.save" "book.delete"
-                  "note.open" "note.new" "note.child" "note.fold" "note.tap" "note.save" "note.operate"
-                  "search.run" "search.saved" "search.save" "search.delete" "page" "theme"))
-    (jetpacs-undefaction (concat "orgzly." name)))
-  (jetpacs-apps-unregister "orgzly") (jetpacs-chrome-remove "orgzly")
+  (jetpacs-apps-unregister "orgzly")
   (dolist (id '("orgzly.light" "orgzly.dark")) (jetpacs-design-unregister-profile id))
   t)
 
