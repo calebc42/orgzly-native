@@ -7,6 +7,7 @@
 ;; `require' only loads; the `orgzly' command or the Apps screen registers.
 ;;; Code:
 (require 'orgzly-ui)
+(require 'orgzly-reminders)
 (require 'jetpacs-apps)
 (require 'jetpacs-shell)
 
@@ -389,6 +390,7 @@ template's shape cannot vary per row (SPEC 13.8.5)."
                   :destinations '((:key "books" :label "Notebooks" :icon "book"
                                     :verb "orgzly.home"))
                   :requires-extensions '("jetpacs.components" "jetpacs.design"))
+  (orgzly-reminders-register)
   t)
 
 (defun orgzly-unregister ()

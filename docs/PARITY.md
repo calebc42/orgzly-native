@@ -13,14 +13,15 @@ They are historical evidence, not acceptance results for this port.
 | Search | Recovered dotted parser, matcher and ordering; saved queries can be added/replaced/deleted and persisted |
 | Agenda | Overdue and day groups, repeaters and warning periods, saved `ad.N` queries, fixed snapshot clock |
 | Appearance | Orgzly blue-grey chrome, flat rows, red TODO and green DONE, light/dark Foundation Styles profiles |
+| Reminders | Scheduled, deadline and event reminders on the phone through the Foundation's reminder projection: each note's next occurrence, the soonest `orgzly-reminders-max-count` (64), opaque ids, cleared when `orgzly-reminders-enabled` is off; no Done/Snooze buttons, a tap opens the app |
 | Lifecycle | Optional packaged app, required Foundation extensions, owner registrations, teardown, bounded snapshot refresh and stale edit refusal |
 
 Historical extras are retained as reference rather than exposed through obsolete
 handlers: multi-select batch UI, refile/archive dialogs, clock controls, property
-editor, timestamp picker dialogs, in-place table/Babel/block editing, platform
-reminder delivery, home-screen widgets and Android share capture. The recovered
-data APIs and reminder calculation tests remain available, but the current UI
-does not claim those integrations. Rich content is currently edited as Org source
+editor, timestamp picker dialogs, in-place table/Babel/block editing,
+home-screen widgets and Android share capture. The recovered data APIs remain
+available, but the current UI does not claim those integrations. Reminder
+settings are Customize variables; there is no settings screen yet. Rich content is currently edited as Org source
 in Foundation fields; no Babel execution is triggered by the applet.
 
 Synchronization remains the user's existing Org-file workflow. Orgzly Native

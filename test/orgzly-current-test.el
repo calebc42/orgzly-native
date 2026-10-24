@@ -233,5 +233,18 @@ checks, run from the foundation's applet tooling."
     (should (string-match-p "Registered on entry: yes" report)))
   (should (assoc "orgzly" jetpacs-apps--registry)))
 
+(ert-deftest orgzly-reminders-follow-the-app-lifecycle ()
+  "Registering Orgzly starts its reminder projection; unregistering, the
+owner's teardown, removes it."
+  (unwind-protect
+      (progn
+        (orgzly-register)
+        (should (jetpacs-reminders-projection-p "orgzly"))
+        (should (jetpacs--owned-names "reminder-projection" "orgzly"))
+        (orgzly-unregister)
+        (should-not (jetpacs-reminders-projection-p "orgzly"))
+        (should-not (jetpacs--owned-names "reminder-projection" "orgzly")))
+    (orgzly-register)))
+
 (provide 'orgzly-current-test)
 ;;; orgzly-current-test.el ends here

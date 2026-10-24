@@ -147,6 +147,61 @@ unless grouping overdue scheduled notes with today is on."
     (should (= (length (cdr (nth 2 groups))) 1))
     (should (eq (alist-get 'kind (car (cdr (nth 2 groups)))) 'event))))
 
+(ert-deftest orgzly-reminders-projection-is-opaque-capped-and-unique ()
+  "The phone set hides paths, keeps the soonest, sends each id once, and
+gives an untitled note a title."
+  (let* ((specs (list '((id . "orgzly:/notes/gtd.org:1:scheduled:100")
+                        (at_ms . 100000) (title . "First") (body . "b"))
+                      '((id . "orgzly:/notes/gtd.org:1:scheduled:100")
+                        (at_ms . 100000) (title . "First") (body . "b"))
+                      '((id . "orgzly:/notes/gtd.org:2:deadline:200")
+                        (at_ms . 200000) (title . "  ") (body . "b"))
+                      '((id . "orgzly:/notes/gtd.org:3:event:300")
+                        (at_ms . 300000) (title . "Third") (body . "b")))))
+    (cl-letf (((symbol-function 'orgzly-reminders-upcoming)
+               (lambda (&optional _now) specs)))
+      (let ((orgzly-reminders-max-count 64))
+        (let ((set (orgzly-reminders-projection)))
+          (should (= (length set) 3))
+          (should (equal (mapcar (lambda (r) (plist-get r :title)) set)
+                         '("First" "Orgzly reminder" "Third")))
+          (dolist (reminder set)
+            (should (string-prefix-p "orgzly-reminder-" (plist-get reminder :id)))
+            (should-not (string-search "notes" (plist-get reminder :id)))
+            ;; The foundation's own validation accepts every member.
+            (should (jetpacs-device--reminder-check reminder)))))
+      (let ((orgzly-reminders-max-count 2))
+        (should (equal (mapcar (lambda (r) (plist-get r :title))
+                               (orgzly-reminders-projection))
+                       '("First" "Orgzly reminder")))))))
+
+(ert-deftest orgzly-reminders-register-defines-the-projection ()
+  "Registration syncs through the foundation's projection, and turning
+reminders off clears the phone's set."
+  (let ((jetpacs-reminders--projections (make-hash-table :test #'equal))
+        (orgzly-reminders-enabled t)
+        calls)
+    (cl-letf (((symbol-function 'jetpacs-connected-p) (lambda () t))
+              ((symbol-function 'jetpacs-granted-p) (lambda (&rest _) t))
+              ((symbol-function 'orgzly-reminders-projection)
+               (lambda (&optional _now) '((:id "orgzly-reminder-a" :at_ms 1 :title "A"))))
+              ((symbol-function 'jetpacs-reminders-set)
+               (cl-function
+                (lambda (reminders &key owner callback)
+                  (push (cons owner reminders) calls)
+                  (funcall callback (length reminders) nil)))))
+      (unwind-protect
+          (progn
+            (orgzly-reminders-register)
+            (jetpacs-reminders-sync-now "orgzly")
+            (setq orgzly-reminders-enabled nil)
+            (jetpacs-reminders-sync-now "orgzly")
+            (should (equal (nreverse calls)
+                           '(("orgzly" (:id "orgzly-reminder-a" :at_ms 1 :title "A"))
+                             ("orgzly")))))
+        (orgzly-reminders-unregister))
+      (should-not (jetpacs-reminders-projection-p "orgzly")))))
+
 ;; ─── Reminders ───────────────────────────────────────────────────────────────
 
 (ert-deftest orgzly-reminders-timed-and-date-only ()

@@ -4,27 +4,47 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Package-Requires: ((emacs "30.1"))
 
+;;; Commentary:
+
 ;; Orgzly's reminder classes on the jetpacs `reminders.set' frame: exact
 ;; alarms for scheduled times, deadline times, and events, each behind its
 ;; own toggle; date-only items remind at `orgzly-reminders-daily-time',
 ;; and deadline/event reminders lead by the warning cookie.  Armed like
-;; Orgzly: each note's next future occurrence, however far out.  The set
-;; is replace-set semantics and persisted across reboots by the
-;; companion; each shell push re-derives it.
+;; Orgzly: each note's next future occurrence, however far out, though
+;; only the soonest `orgzly-reminders-max-count' go to the phone, whose
+;; reminder allowance is shared by every app.
+;;
+;; Delivery is a `jetpacs-reminders-define-projection': the set is
+;; re-derived after every surface push, replaced whole, and persisted
+;; across reboots by the Companion.  Turning `orgzly-reminders-enabled'
+;; off clears it.  Ids are opaque hashes, so no path reaches the phone.
 ;;
 ;; Companion-protocol limit (see docs/PARITY.md): the reminder
 ;; notification carries no Done/Snooze buttons — tapping it opens the
 ;; app, where the note is one tap away.
 
-;;; Commentary:
-
-;; Recovered Orgzly domain logic; current presentation lives in orgzly-ui.el.
-
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
+(require 'jetpacs-widgets)               ; jetpacs-opaque-id
+(require 'jetpacs-reminders)
 (require 'orgzly-data)
 (require 'orgzly-agenda)
+
+(defconst orgzly-reminders-owner "orgzly"
+  "Owner of Orgzly's device reminder set.")
+
+(defcustom orgzly-reminders-enabled t
+  "Deliver Orgzly reminders to the phone.
+Turning this off clears the reminders Orgzly placed there."
+  :type 'boolean :group 'orgzly)
+
+(defcustom orgzly-reminders-max-count 64
+  "Most reminders Orgzly places on the phone, the soonest first.
+The phone's allowance (256 on the Jetpacs Companion) is shared by every
+app, and a set that would exceed it is refused whole."
+  :type '(integer 1 256) :group 'orgzly)
 
 (defcustom orgzly-reminders-scheduled t
   "Remind at scheduled times (Orgzly: reminders for scheduled)."
@@ -123,6 +143,40 @@ Orgzly's model; each push re-derives the set."
       (setq specs (nconc specs
                          (orgzly-reminders--entry-specs entry now done))))
     (sort specs (lambda (a b) (< (alist-get 'at_ms a) (alist-get 'at_ms b))))))
+
+(defun orgzly-reminders--reminder (spec)
+  "SPEC from `orgzly-reminders-upcoming' as a SPEC 18.6 reminder plist."
+  (let ((title (alist-get 'title spec)))
+    (list :id (jetpacs-opaque-id "orgzly-reminder-" (alist-get 'id spec))
+          :at_ms (alist-get 'at_ms spec)
+          :title (if (and (stringp title) (not (string-blank-p title)))
+                     title
+                   "Orgzly reminder")
+          :body (alist-get 'body spec))))
+
+(defun orgzly-reminders-projection (&optional now)
+  "The reminders Orgzly wants on the phone at NOW, soonest first.
+At most `orgzly-reminders-max-count', each id once.  Signals when the
+notebooks cannot be read, so a failed scan never clears the phone."
+  (let ((seen (make-hash-table :test #'equal))
+        reminders)
+    (dolist (spec (orgzly-reminders-upcoming now))
+      (let ((reminder (orgzly-reminders--reminder spec)))
+        (when (and (< (length reminders) orgzly-reminders-max-count)
+                   (not (gethash (plist-get reminder :id) seen)))
+          (puthash (plist-get reminder :id) t seen)
+          (push reminder reminders))))
+    (nreverse reminders)))
+
+(defun orgzly-reminders-register ()
+  "Keep Orgzly's reminders on the phone in step with the notebooks."
+  (jetpacs-reminders-define-projection
+   orgzly-reminders-owner #'orgzly-reminders-projection
+   :enabled-p (lambda () orgzly-reminders-enabled)))
+
+(defun orgzly-reminders-unregister ()
+  "Stop syncing Orgzly's reminders; the phone keeps the set it holds."
+  (jetpacs-reminders-remove-projection orgzly-reminders-owner))
 
 (provide 'orgzly-reminders)
 ;;; orgzly-reminders.el ends here
