@@ -19,21 +19,28 @@
 ;; across reboots by the Companion.  Turning `orgzly-reminders-enabled'
 ;; off clears it.  Ids are opaque hashes, so no path reaches the phone.
 ;;
-;; Companion-protocol limit (see docs/PARITY.md): the reminder
-;; notification carries no Done/Snooze buttons — tapping it opens the
-;; app, where the note is one tap away.
+;; A tap runs `orgzly.home', queued or waking Emacs when offline, and
+;; opens the app where the note is one tap away.  There are no Done or
+;; Snooze buttons (see docs/PARITY.md).
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'jetpacs-widgets)               ; jetpacs-opaque-id
+(require 'jetpacs-surfaces)              ; jetpacs-granted-p
+(require 'jetpacs-widgets)               ; jetpacs-opaque-id, jetpacs-action
 (require 'jetpacs-reminders)
 (require 'orgzly-data)
 (require 'orgzly-agenda)
 
 (defconst orgzly-reminders-owner "orgzly"
   "Owner of Orgzly's device reminder set.")
+
+(defconst orgzly-reminders--surface "app:orgzly"
+  "The app surface a reminder tap opens on the phone.")
+
+(defconst orgzly-reminders--tap-ttl-seconds 86400
+  "How long a reminder tap made offline stays queued.")
 
 (defcustom orgzly-reminders-enabled t
   "Deliver Orgzly reminders to the phone.
@@ -144,24 +151,40 @@ Orgzly's model; each push re-derives the set."
                          (orgzly-reminders--entry-specs entry now done))))
     (sort specs (lambda (a b) (< (alist-get 'at_ms a) (alist-get 'at_ms b))))))
 
-(defun orgzly-reminders--reminder (spec)
-  "SPEC from `orgzly-reminders-upcoming' as a SPEC 18.6 reminder plist."
+(defun orgzly-reminders--on-tap ()
+  "The action a reminder tap runs: open Orgzly's notebooks.
+Without it the phone gives the notification no tap at all.  Offline it
+waits in the queue, or wakes Emacs when the phone grants that; the app
+surface opens only where the phone grants rich reminder actions."
+  (jetpacs-action "orgzly.home"
+                  :when-offline (if (jetpacs-granted-p "offline.wake")
+                                    'wake
+                                  'queue)
+                  :ttl-s orgzly-reminders--tap-ttl-seconds
+                  :open-surface (and (jetpacs-granted-p "reminders.actions")
+                                     orgzly-reminders--surface)))
+
+(defun orgzly-reminders--reminder (spec on-tap)
+  "SPEC from `orgzly-reminders-upcoming' as a SPEC 18.6 reminder plist.
+ON-TAP is the action the notification's tap runs."
   (let ((title (alist-get 'title spec)))
     (list :id (jetpacs-opaque-id "orgzly-reminder-" (alist-get 'id spec))
           :at_ms (alist-get 'at_ms spec)
           :title (if (and (stringp title) (not (string-blank-p title)))
                      title
                    "Orgzly reminder")
-          :body (alist-get 'body spec))))
+          :body (alist-get 'body spec)
+          :on_tap on-tap)))
 
 (defun orgzly-reminders-projection (&optional now)
   "The reminders Orgzly wants on the phone at NOW, soonest first.
 At most `orgzly-reminders-max-count', each id once.  Signals when the
 notebooks cannot be read, so a failed scan never clears the phone."
   (let ((seen (make-hash-table :test #'equal))
+        (on-tap (orgzly-reminders--on-tap))
         reminders)
     (dolist (spec (orgzly-reminders-upcoming now))
-      (let ((reminder (orgzly-reminders--reminder spec)))
+      (let ((reminder (orgzly-reminders--reminder spec on-tap)))
         (when (and (< (length reminders) orgzly-reminders-max-count)
                    (not (gethash (plist-get reminder :id) seen)))
           (puthash (plist-get reminder :id) t seen)

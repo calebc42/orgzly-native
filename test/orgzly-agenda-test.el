@@ -148,8 +148,8 @@ unless grouping overdue scheduled notes with today is on."
     (should (eq (alist-get 'kind (car (cdr (nth 2 groups)))) 'event))))
 
 (ert-deftest orgzly-reminders-projection-is-opaque-capped-and-unique ()
-  "The phone set hides paths, keeps the soonest, sends each id once, and
-gives an untitled note a title."
+  "The phone set hides paths, keeps the soonest, sends each id once, gives
+an untitled note a title, and gives every reminder a tap."
   (let* ((specs (list '((id . "orgzly:/notes/gtd.org:1:scheduled:100")
                         (at_ms . 100000) (title . "First") (body . "b"))
                       '((id . "orgzly:/notes/gtd.org:1:scheduled:100")
@@ -168,6 +168,9 @@ gives an untitled note a title."
           (dolist (reminder set)
             (should (string-prefix-p "orgzly-reminder-" (plist-get reminder :id)))
             (should-not (string-search "notes" (plist-get reminder :id)))
+            ;; Without a tap action the phone's notification does nothing.
+            (should (equal (plist-get (plist-get reminder :on_tap) :action)
+                           "orgzly.home"))
             ;; The foundation's own validation accepts every member.
             (should (jetpacs-device--reminder-check reminder)))))
       (let ((orgzly-reminders-max-count 2))
