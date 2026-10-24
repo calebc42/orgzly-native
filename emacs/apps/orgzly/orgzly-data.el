@@ -33,6 +33,7 @@
 (require 'subr-x)
 (require 'org)
 (require 'org-archive)
+(require 'jetpacs-files)                 ; jetpacs-files-segment-p
 
 (defgroup orgzly nil
   "Orgzly Revived, as a Jetpacs Tier 1."
@@ -82,9 +83,8 @@
 
 (defun orgzly-data-book-file (book)
   "Return BOOK's contained local Org file, rejecting aliases and traversal."
-  (unless (and (stringp book) (<= 1 (length book) 128)
-               (not (member book '("." "..")))
-               (not (string-match-p "[/\\\\\n\r]" book))
+  (unless (and (jetpacs-files-segment-p book) (<= (length book) 128)
+               (not (string-search "\\" book))
                (not (file-remote-p orgzly-directory)))
     (error "Invalid local notebook name"))
   (let* ((root (file-name-as-directory (file-truename orgzly-directory)))

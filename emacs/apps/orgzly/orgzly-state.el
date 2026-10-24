@@ -7,6 +7,7 @@
 (require 'orgzly-data)
 (require 'orgzly-query)
 (require 'orgzly-agenda)
+(require 'jetpacs-widgets)               ; jetpacs-opaque-id
 
 (defvar orgzly-state nil "The last complete app snapshot; builders only read it.")
 (defvar orgzly-state-folded nil "Opaque note ids whose descendants are folded.")
@@ -40,7 +41,7 @@ Its visible rows are the surface data document (SPEC 13.8.5).")
 
 (defun orgzly-state-id (file revision &optional pos)
   "Return an opaque identifier for FILE, REVISION and optional heading POS."
-  (concat "oz-" (substring (secure-hash 'sha256 (format "%S" (list file revision pos))) 0 32)))
+  (jetpacs-opaque-id "oz-" (list file revision pos)))
 
 (defun orgzly-refresh (&optional now)
   "Publish one bounded notebook snapshot at NOW, or the current time.
