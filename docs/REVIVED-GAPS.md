@@ -10,22 +10,32 @@ panes) for the timestamp dialog, the tags dropdown and the light palette.
 
 ## Behaviour
 
-- **"Note modified" on Back.** Revived asks "Save changes?" (Cancel,
-  Discard, Save) when leaving an edited note with Back; Orgzly Native leaves
-  without asking and keeps the draft.
-- **Book and note overflow menus.** The notebook and note screens' overflow
-  menus were not compared item by item with Revived's.
+Closed on 2026-10-25: the "Note modified / Save changes?" prompt on Back,
+Revived's overflow menus item for item (Notebooks, notebook, note; Orgzly
+Native's own items follow only while `orgzly-menu-extras` is on), notebook
+Tags (`#+FILETAGS`), Clock in/out/cancel and Sort note on the content,
+Share, the platform DatePickerDialog and TimePickerDialog (the picker
+slot's `platform_dialog`), and the Repeat, Delay and Warning period
+dialogs on `jetpacs.wheel`, Android's NumberPicker.
+
+- **Submenus.** Revived's Clock, Metadata and Share open cascading popup
+  submenus; Jetpacs menus have no submenus, so Clock and Share open a
+  choice dialog and Metadata still folds the metadata section.
+- **Import Org file.** Revived opens Android's document picker; EBP has no
+  document-picker builtin, so Orgzly Native lists the Org files of
+  `orgzly-import-directory`.
+- **Searches menu.** Revived's Import and Export of saved searches are
+  missing.
 - **Insert timestamp.** Revived inserts the stamp at the cursor of the field
   being edited; Orgzly Native appends it to the end of the content while
-  content is edited, else the title.
+  content is edited, else the title.  A `text_input` caret
+  (SPEC 14.6.1 `report_caret`, today dropdown-only) would close it.
 - **Tags dropdown filtering.** Revived's dropdown lists only tags starting
   with the word being typed; Orgzly Native always lists every known tag
   (a pick still completes the typed word).
-- **Repeater and delay.** Revived opens its own repeater and delay pickers;
-  Orgzly Native asks in a text dialog (`.+1w`, `-1d`).
-- **Date and time pickers.** The timestamp dialog's Day and Time buttons
-  open Compose Material pickers, not Android's DatePickerDialog and
-  TimePickerDialog that Revived opens.
+- **Period type hint.** Revived's line under the period wheels follows the
+  type wheel; Orgzly Native's shows the hint of the type the dialog opened
+  with.
 
 ## Layout still off
 

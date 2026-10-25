@@ -267,15 +267,16 @@ let a template bind."
              (jetpacs-with-attrs (orgzly-ui--row-column item) :weight 1)
              :align "top")))
           :weight 1)
-         (if (string-empty-p (gethash "fold" item))
-             (jetpacs-spacer :width 48)
-           (jetpacs-with-attrs
-            (jetpacs-design-pressable
-             '("orgzly.fold") (orgzly-ui-action "orgzly.note.fold" (list :id (gethash "id" item)))
-             (list (jetpacs-with-attrs
-                    (orgzly-ui-styled-text "orgzly.t.fold" (gethash "fold" item))
-                    :width 48)))
-            :width 48))
+         (let ((width (orgzly-design-fold-width (jetpacs-window))))
+           (if (string-empty-p (gethash "fold" item))
+               (jetpacs-spacer :width width)
+             (jetpacs-with-attrs
+              (jetpacs-design-pressable
+               '("orgzly.fold") (orgzly-ui-action "orgzly.note.fold" (list :id (gethash "id" item)))
+               (list (jetpacs-with-attrs
+                      (orgzly-ui-styled-text "orgzly.t.fold" (gethash "fold" item))
+                      :width width)))
+              :width width)))
          :align "top")))))
    :key (gethash "id" item)))
 
@@ -921,9 +922,10 @@ in the button bar, Set too for a timestamp."
      :height 48)
     (jetpacs-spacer :height 13.87))))
 
-(defun orgzly-ui-name-dialog (title hint ok)
+(defun orgzly-ui-name-dialog (title hint ok &optional value)
   "Revived's single-field AlertDialog: TITLE, an underlined HINT field, OK.
-The field is `oz-dialog-name'; Cancel dismisses and OK submits it."
+The field is `oz-dialog-name', holding VALUE; Cancel dismisses and OK
+submits it."
   (orgzly-ui-styled
    "orgzly.dialog"
    (jetpacs-column
@@ -934,7 +936,7 @@ The field is `oz-dialog-name'; Cancel dismisses and OK submits it."
      "orgzly.dialog.input"
      (jetpacs-column
       (orgzly-ui--field-scope
-       'dialog (jetpacs-text-input "oz-dialog-name" :value "" :hint hint :single-line t
+       'dialog (jetpacs-text-input "oz-dialog-name" :value (or value "") :hint hint :single-line t
                                    :max-length 512 :autofocus t))
       (orgzly-ui-styled "orgzly.dialog.underline" (jetpacs-spacer :height 2))))
     (jetpacs-spacer :height 36.6)
@@ -948,6 +950,144 @@ The field is `oz-dialog-name'; Cancel dismisses and OK submits it."
       :align "center")
      :height 48)
     (jetpacs-spacer :height 13.5))))
+
+(defun orgzly-ui-choice-dialog (title choices)
+  "An AlertDialog titled TITLE listing CHOICES, (LABEL . ACTION) pairs."
+  (orgzly-ui-styled
+   "orgzly.dialog"
+   (apply
+    #'jetpacs-column
+    (append
+     (list (jetpacs-spacer :height 18.13)
+           (orgzly-ui-styled "orgzly.dialog.title"
+                             (orgzly-ui-styled-text "orgzly.t.dialog-title" title))
+           (jetpacs-spacer :height 8))
+     (mapcar (lambda (choice)
+               (jetpacs-with-attrs
+                (jetpacs-design-pressable
+                 '("orgzly.dialog.item") (cdr choice)
+                 (list (jetpacs-with-attrs
+                        (jetpacs-row (jetpacs-spacer :width 24)
+                                     (orgzly-ui-styled-text "orgzly.t.value" (car choice))
+                                     :align "center")
+                        :height 48 :weight 1)))
+                :key (jetpacs-wire-id "choice" (car choice))))
+             choices)
+     (list (jetpacs-spacer :height 8)
+           (jetpacs-with-attrs
+            (jetpacs-row (jetpacs-spacer :weight 1)
+                         (orgzly-ui--dialog-button "Cancel" (jetpacs-dialog-dismiss))
+                         (jetpacs-spacer :width 24)
+                         :align "center")
+            :height 48)
+           (jetpacs-spacer :height 13.87))))))
+
+(defconst orgzly-ui-period-units
+  '(("h" . "Hour") ("d" . "Day") ("w" . "Week") ("m" . "Month") ("y" . "Year"))
+  "Org interval units and the names Revived's period wheels show.")
+
+(defun orgzly-ui-period-kind (part field)
+  "The period dialog for timestamp PART of FIELD, as Revived picks it.
+A plist: :title, :description, :types (cookie prefixes) and :hints (the
+line under the wheels for each type).  A deadline's delay is a warning
+period, which has no types."
+  (cond
+   ((equal part "repeater")
+    '(:title "Repeat" :description "After task is marked complete, repeater will shift the time"
+      :types ("+" "++" ".+")
+      :hints ("Add period to time" "Keep adding period to time until time reaches future"
+              "Add period to current time")))
+   ((equal field "deadline")
+    '(:title "Warning period" :description "Warn about the approaching or missed deadline"
+      :types ("-") :hints nil))
+   (t
+    '(:title "Delay" :description "Delay the display of the task in the agenda"
+      :types ("-" "--")
+      :hints ("Affects all occurrences" "Affects only the first scheduled occurrence")))))
+
+(defun orgzly-ui-period-dialog (kind type value unit on-type)
+  "Revived's period dialog for KIND (see `orgzly-ui-period-kind').
+Three wheels: TYPE among the kind's types, VALUE from 1 to 100 and UNIT,
+an Org unit letter.  ON-TYPE runs when the type wheel settles.  OK
+submits, capturing `oz-period-type', `oz-period-value' and
+`oz-period-unit'."
+  (let* ((dark (orgzly-ui-dark))
+         (types (plist-get kind :types))
+         (strong (orgzly-design-color 'strong dark))
+         (divider (orgzly-design-color 'divider dark))
+         (wheel (lambda (id values value &rest more)
+                  (apply #'jetpacs-design-wheel id values value :color strong :divider-color divider more)))
+         (hint (lambda (text)
+                 (orgzly-ui-styled "orgzly.period.hint"
+                                   (jetpacs-with-attrs (orgzly-ui-styled-text "orgzly.t.period-hint" text)
+                                                       :fill_fraction 1)))))
+    (orgzly-ui-styled
+     "orgzly.dialog"
+     (jetpacs-column
+      (jetpacs-spacer :height 18)
+      (orgzly-ui-styled "orgzly.dialog.title"
+                        (orgzly-ui-styled-text "orgzly.t.period-title" (plist-get kind :title)))
+      (jetpacs-spacer :height 16)
+      (funcall hint (plist-get kind :description))
+      (jetpacs-spacer :height 8)
+      (jetpacs-with-attrs
+       (apply #'jetpacs-row
+              (append
+               (list (jetpacs-spacer :weight 1))
+               (when (cdr types)
+                 (list (funcall wheel "oz-period-type" types type :on-change on-type)
+                       (jetpacs-spacer :width 8)))
+               (list (funcall wheel "oz-period-value"
+                              (mapcar #'number-to-string (number-sequence 1 (max 100 (string-to-number value))))
+                              value)
+                     (jetpacs-spacer :width 8)
+                     (funcall wheel "oz-period-unit" (mapcar #'cdr orgzly-ui-period-units)
+                              (alist-get unit orgzly-ui-period-units "Day" nil #'equal))
+                     (jetpacs-spacer :weight 1))))
+       :height 180)
+      (jetpacs-spacer :height 16)
+      (if (plist-get kind :hints)
+          (funcall hint (nth (or (cl-position type types :test #'equal) 0) (plist-get kind :hints)))
+        (jetpacs-spacer :height 0))
+      (jetpacs-spacer :height 12)
+      (jetpacs-with-attrs
+       (jetpacs-row
+        (jetpacs-spacer :weight 1)
+        (orgzly-ui--dialog-button "Cancel" (jetpacs-dialog-dismiss))
+        (jetpacs-spacer :width 8)
+        (orgzly-ui--dialog-button "OK" (jetpacs-dialog-submit
+                                        :capture-fields (append (and (cdr types) '("oz-period-type"))
+                                                                '("oz-period-value" "oz-period-unit"))))
+        (jetpacs-spacer :width 12)
+        :align "center")
+       :height 48)
+      (jetpacs-spacer :height 4)))))
+
+(defun orgzly-ui-modified-dialog ()
+  "Revived's \"Note modified\" prompt: Cancel apart, then Discard and Save.
+Discard and Save submit their names; Cancel dismisses."
+  (orgzly-ui-styled
+   "orgzly.dialog"
+   (jetpacs-column
+    (jetpacs-spacer :height 18.13)
+    (orgzly-ui-styled "orgzly.dialog.title"
+                      (orgzly-ui-styled-text "orgzly.t.dialog-title" "Note modified"))
+    (jetpacs-spacer :height 16)
+    (orgzly-ui-styled "orgzly.dialog.title"
+                      (orgzly-ui-styled-text "orgzly.t.dialog-message" "Save changes?"))
+    (jetpacs-spacer :height 43.37)
+    (jetpacs-with-attrs
+     (jetpacs-row
+      (jetpacs-spacer :width 24.5)
+      (orgzly-ui--dialog-button "Cancel" (jetpacs-dialog-dismiss))
+      (jetpacs-spacer :weight 1)
+      (orgzly-ui--dialog-button "Discard" (jetpacs-dialog-submit :value "discard"))
+      (jetpacs-spacer :width 8)
+      (orgzly-ui--dialog-button "Save" (jetpacs-dialog-submit :value "save"))
+      (jetpacs-spacer :width 24)
+      :align "center")
+     :height 48)
+    (jetpacs-spacer :height 13.87))))
 
 (defconst orgzly-ui-ts-checks '(time-on end-on repeater-on delay-on)
   "The timestamp dialog's checkboxes, each a part of `orgzly-state-ts'.")
@@ -1001,12 +1141,14 @@ The field is `oz-dialog-name'; Cancel dismisses and OK submits it."
                                                                     :fill_fraction 1))
                               :weight 1)))))
 
-(defun orgzly-ui--ts-check (check ts &optional on-change)
-  "The 48dp checkbox for CHECK of TS; ON-CHANGE runs when it flips."
+(defun orgzly-ui--ts-check (check ts &optional on-change disabled)
+  "The 48dp checkbox for CHECK of TS; ON-CHANGE runs when it flips.
+DISABLED greys it out, as Revived's end time box is without a time."
   (jetpacs-with-attrs
    (jetpacs-box (jetpacs-checkbox (orgzly-ui-ts-check-id check)
                                   :checked (if (plist-get ts (intern (format ":%s" check))) t :json-false)
-                                  :on-change on-change)
+                                  :on-change on-change
+                                  :enabled (if disabled :json-false t))
                 :alignment "center")
    :width 48))
 
@@ -1056,7 +1198,7 @@ dispatch `orgzly.ts.part', which shows the dialog again."
                                                   (orgzly-ui--ts-part "end")
                                                   :value (plist-get ts :end)
                                                   :enabled (if time-on t :json-false)))
-         (orgzly-ui--ts-check 'end-on ts)
+         (orgzly-ui--ts-check 'end-on ts nil (not time-on))
          :align "center")
         (jetpacs-spacer :height 8)
         (jetpacs-row (orgzly-ui--ts-label "Repeater") gap (jetpacs-spacer :weight 1) gap)
@@ -1070,6 +1212,8 @@ dispatch `orgzly.ts.part', which shows the dialog again."
                      (orgzly-ui--ts-check 'delay-on ts)
                      (jetpacs-spacer :weight 1) gap
                      :align "center")))
+      ;; From a 600dp smallest width Revived's buttons sit 16dp lower.
+      (jetpacs-spacer :height (if (orgzly-design-sw600-p (jetpacs-window)) 16 0))
       (jetpacs-with-attrs
        (jetpacs-row
         (jetpacs-spacer :width 24)
@@ -1203,36 +1347,51 @@ toolbar's Done saves everything at once."
 
 (defun orgzly-ui--overflow-items (route)
   "Revived's overflow items for ROUTE's screen, then Orgzly Native's own.
-Items Revived has but Orgzly Native cannot honor are left out; the ones
-after them reach operations Revived offers elsewhere (selection mode)."
-  (let ((kind (plist-get route :kind)) (id (plist-get route :id))
-        (common (list (jetpacs-menu-item "Sync" (orgzly-ui-action "orgzly.refresh"))
-                      (jetpacs-menu-item "Settings" (orgzly-ui-action "orgzly.open" '(:view "settings"))))))
+Orgzly Native's items follow only while `orgzly-menu-extras' is non-nil."
+  (let* ((kind (plist-get route :kind)) (id (plist-get route :id))
+         (scope (orgzly-field-scope route))
+         (content (let ((orgzly-field-scope scope))
+                    (and (orgzly-ui-note-editing-p "content") '("oz-content"))))
+         (item (lambda (label name &optional args confirm fields)
+                 (jetpacs-menu-item label (orgzly-ui-action name args confirm fields))))
+         (common (list (funcall item "Sync" "orgzly.refresh")
+                       (funcall item "Settings" "orgzly.open" '(:view "settings")))))
     (append
      (pcase kind
+       ('books (cons (funcall item "Import Org file" "orgzly.book.import") common))
        ('book
-        (when-let* ((book (orgzly-state-book (plist-get route :book))))
-          (list (jetpacs-menu-item "Edit preface"
-                                   (orgzly-ui-action "orgzly.book.edit" (list :id (alist-get 'id book)))))))
-       ('note
-        (list (jetpacs-menu-item "Metadata" (orgzly-ui-action "orgzly.note.section" '(:section "metadata")))
-              (jetpacs-menu-item "Delete" (orgzly-ui-action "orgzly.note.operate"
-                                                            (list :id id :operation "delete")
-                                                            "Delete this note and its children?")))))
-     common
-     (when (eq kind 'note)
-       (mapcar (lambda (item)
-                 (jetpacs-menu-item (car item) (orgzly-ui-action "orgzly.note.operate"
-                                                                 (list :id id :operation (cdr item)))))
-               '(("Promote" . "promote") ("Demote" . "demote") ("Move up" . "up")
-                 ("Move down" . "down") ("Copy" . "copy") ("Paste below" . "paste"))))
-     (when (eq kind 'note)
-       (list (jetpacs-menu-item "New child note" (orgzly-ui-action "orgzly.note.child" (list :id id)))))
-     (list (jetpacs-menu-item (if orgzly-state-dark "Light theme" "Dark theme")
-                              (orgzly-ui-action "orgzly.theme"))
-           ;; Orgzly owns its whole chrome, so the way back to Jetpacs lives here.
-           (jetpacs-menu-item "Jetpacs apps"
-                              (jetpacs-shell-open-surface-action "app:jetpacs.app-store"))))))
+        (append
+         (when-let* ((book (orgzly-state-book (plist-get route :book))))
+           (list (funcall item "Edit preface" "orgzly.book.edit" (list :id (alist-get 'id book)))
+                 (funcall item "Tags" "orgzly.book.tags" (list :id (alist-get 'id book)))))
+         common))
+       ((or 'note 'new-note)
+        (append
+         (list (funcall item "Clock" "orgzly.note.clock" (append (list :scope scope) (and id (list :id id)))
+                        nil content)
+               (funcall item "Metadata" "orgzly.note.section" '(:section "metadata")))
+         (when (eq kind 'note)
+           (list (funcall item "Delete" "orgzly.note.operate" (list :id id :operation "delete")
+                          "Delete this note and its children?")
+                 (funcall item "Share" "orgzly.note.share" (list :id id))))
+         common
+         (list (funcall item "Sort note" "orgzly.note.content-op"
+                        (append (list :scope scope :op "sort") (and id (list :id id)))
+                        nil content))))
+       (_ common))
+     (when orgzly-menu-extras
+       (append
+        (when (eq kind 'note)
+          (mapcar (lambda (op) (funcall item (car op) "orgzly.note.operate"
+                                        (list :id id :operation (cdr op))))
+                  '(("Promote" . "promote") ("Demote" . "demote") ("Move up" . "up")
+                    ("Move down" . "down") ("Copy" . "copy") ("Paste below" . "paste"))))
+        (when (eq kind 'note)
+          (list (funcall item "New child note" "orgzly.note.child" (list :id id))))
+        (list (funcall item (if orgzly-state-dark "Light theme" "Dark theme") "orgzly.theme")
+              ;; Orgzly owns its whole chrome, so the way back to Jetpacs lives here.
+              (jetpacs-menu-item "Jetpacs apps"
+                                 (jetpacs-shell-open-surface-action "app:jetpacs.app-store"))))))))
 
 (defun orgzly-ui--overflow (route)
   "The toolbar's overflow menu on ROUTE's screen."
@@ -1450,7 +1609,15 @@ TOGGLED, t or `:json-false', makes the row a toggle for accessibility."
                   ;; Searching, the arrow closes the field as Revived's does.
                   :back (if searching (orgzly-ui-action "orgzly.search.close") (unless top back))
                   ;; The hamburger stays, and back still returns below.
-                  :on-back (and top (not searching) back)
+                  ;; A note asks before an edit is left, as Revived's does.
+                  ;; A remote back gesture names the surface it keeps.
+                  :on-back (cond ((memq kind '(note new-note))
+                                  (jetpacs-shell-action-opening-surface
+                                   "orgzly.note.back" (jetpacs-shell-surface-for "orgzly")
+                                   :args (orgzly-ui--note-args route) :when-offline "drop"
+                                   :capture-fields (mapcar #'orgzly-field-id
+                                                           (orgzly-ui-note-captures route))))
+                                 ((and top (not searching)) back))
                   :drawer (and top (not searching) (orgzly-ui-drawer route))
                   :fab (orgzly-ui-fab route)
                   :on-refresh (and (memq kind '(books book))

@@ -339,5 +339,70 @@ owner's teardown, removes it."
         (should-not (jetpacs--owned-names "reminder-projection" "orgzly")))
     (orgzly-register)))
 
+(ert-deftest orgzly-current-clock-follows-revived ()
+  (cl-letf (((symbol-function 'orgzly--clock-now) (lambda () "[2026-10-25 Sun 15:00]")))
+    (should (equal (orgzly--clock 'in "") ":LOGBOOK:\nCLOCK: [2026-10-25 Sun 15:00]\n:END:"))
+    (should (equal (orgzly--clock 'in "Body")
+                   ":LOGBOOK:\nCLOCK: [2026-10-25 Sun 15:00]\n:END:\n\nBody"))
+    ;; Already clocked in: unchanged.
+    (let ((open ":LOGBOOK:\nCLOCK: [2026-10-25 Sun 13:30]\n:END:\n\nBody"))
+      (should (equal (orgzly--clock 'in open) open))
+      (cl-letf (((symbol-function 'float-time)
+                 (lambda (&optional _) (* 90 60.0))))
+        (should (equal (orgzly--clock 'out open)
+                       ":LOGBOOK:\nCLOCK: [2026-10-25 Sun 13:30]--[2026-10-25 Sun 15:00] => 1:30\n:END:\n\nBody")))
+      (should (equal (orgzly--clock 'cancel open) "Body")))
+    ;; Clocked out: in adds a new line at the drawer's start.
+    (let ((closed ":LOGBOOK:\nCLOCK: [2026-10-25 Sun 13:30]--[2026-10-25 Sun 14:00] =>  0:30\n:END:"))
+      (should (equal (orgzly--clock 'in closed)
+                     (concat ":LOGBOOK:\nCLOCK: [2026-10-25 Sun 15:00]\n"
+                             "CLOCK: [2026-10-25 Sun 13:30]--[2026-10-25 Sun 14:00] =>  0:30\n:END:")))
+      (should (equal (orgzly--clock 'out closed) closed))
+      (should (equal (orgzly--clock 'cancel closed) closed)))))
+
+(ert-deftest orgzly-current-back-asks-only-after-an-edit ()
+  (orgzly-test-with-snapshot
+    (let* ((entry (car (orgzly-state-entries "gtd")))
+           (args (list :id (alist-get 'id entry)))
+           (orgzly-field-scope (orgzly-field-scope (list :kind 'note :id (alist-get 'id entry))))
+           (same (list :fields (list (intern (concat ":" (orgzly-field-id "oz-tags")))
+                                     (string-join (alist-get 'tags entry) " "))))
+           (shown nil) (popped nil))
+      (cl-letf (((symbol-function 'jetpacs-dialog-slot-show) (lambda (&rest _) (setq shown t)))
+                ((symbol-function 'orgzly--leave-note) (lambda () (setq popped t))))
+        (should-not (orgzly--note-modified-p args same))
+        (should (eq (orgzly--on-note-back args same) 'accepted))
+        (should (and popped (not shown)))
+        (setq popped nil)
+        (should (orgzly--note-modified-p args (orgzly-test-fields)))
+        (orgzly--on-note-back args (orgzly-test-fields))
+        (should (and shown (not popped)))
+        ;; A picked value in the draft counts as an edit too.
+        (setq orgzly-state-draft (list :scope orgzly-field-scope :priority "C"))
+        (should (orgzly--note-modified-p args same))))))
+
+(ert-deftest orgzly-current-overflow-menus-match-revived ()
+  (orgzly-test-with-snapshot
+    (let* ((orgzly-menu-extras nil)
+           (labels (lambda (route) (mapcar (lambda (i) (plist-get i :label))
+                                           (orgzly-ui--overflow-items route))))
+           (entry (car (orgzly-state-entries "gtd"))))
+      (should (equal (funcall labels '(:kind books)) '("Import Org file" "Sync" "Settings")))
+      (should (equal (funcall labels '(:kind book :book "gtd"))
+                     '("Edit preface" "Tags" "Sync" "Settings")))
+      (should (equal (funcall labels (list :kind 'note :id (alist-get 'id entry)))
+                     '("Clock" "Metadata" "Delete" "Share" "Sync" "Settings" "Sort note")))
+      (let ((orgzly-menu-extras t))
+        (should (member "Jetpacs apps" (funcall labels '(:kind books))))))))
+
+(ert-deftest orgzly-current-book-tags-rewrite-filetags ()
+  (orgzly-test-with-snapshot
+    (let* ((book (orgzly-state-book "gtd")) on-conclude)
+      (cl-letf (((symbol-function 'jetpacs-dialog-slot-show)
+                 (lambda (_id _node &rest kw) (setq on-conclude (plist-get kw :on-conclude)))))
+        (should (eq (orgzly--on-book-tags (list :id (alist-get 'id book)) nil) 'accepted))
+        (funcall on-conclude "submitted" '(:fields (:oz-dialog-name "alpha beta")) nil)
+        (should (string-match-p "^#\\+FILETAGS: :alpha:beta:$" (orgzly-data-book-preface "gtd")))))))
+
 (provide 'orgzly-current-test)
 ;;; orgzly-current-test.el ends here

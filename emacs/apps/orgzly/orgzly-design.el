@@ -23,7 +23,7 @@
   "Orgzly dark roles: Revived's dynamic dark scheme as drawn on the device.")
 
 (defconst orgzly-design-light
-  '(("primary" . "#4A5C92") ("on_primary" . "#FFFFFF")
+  '(("primary" . "#396286") ("on_primary" . "#FFFFFF")
     ("secondary" . "#585E71") ("on_secondary" . "#FFFFFF")
     ("background" . "#F8F9FE") ("on_background" . "#2D333A")
     ("surface" . "#F8F9FE") ("on_surface" . "#5A6067")
@@ -38,7 +38,8 @@
     (todo . "#EF9A9A") (done . "#A5D6A7") (link . "#B7CAFF") (hint . "#8F9096")
     (dialog . "#282A2F") (header . "#C4CAE1") (menu . "#1E1F25") (dialog-hint . "#98999F")
     (track-on . "#484A55") (track-off . "#5A5A5E") (thumb-on . "#C0C6DD") (thumb-off . "#B9B9B9")
-    (pill-off . "#414247") (on-pill-off . "#89898E"))
+    (pill-off . "#414247") (on-pill-off . "#89898E")
+    (surface . "#0C0E12") (divider . "#8F9096"))
   "Revived dark colors with no EBP role: containers, accents and states.")
 
 (defconst orgzly-design-light-colors
@@ -46,9 +47,10 @@
     (guide . "#DADBDF") (bullet . "#455362") (fab . "#A4CDF6") (on-fab . "#174567")
     (pill . "#D5E4F7") (on-pill . "#455362") (dim . "#B1B5BA")
     (todo . "#B71C1C") (done . "#1B5E20") (link . "#396286") (hint . "#ABADB3")
-    (dialog . "#E4E8F0") (header . "#4A5C92") (menu . "#EBEEF5") (dialog-hint . "#76777F")
-    (track-on . "#B4C5FF") (track-off . "#C6C6D0") (thumb-on . "#4A5C92") (thumb-off . "#ECECEC")
-    (pill-off . "#CDD2DA") (on-pill-off . "#90959D"))
+    (dialog . "#E4E8F0") (header . "#396286") (menu . "#EBEEF5") (dialog-hint . "#76777F")
+    (track-on . "#B4C5FF") (track-off . "#C6C6D0") (thumb-on . "#396286") (thumb-off . "#ECECEC")
+    (pill-off . "#CDD2DA") (on-pill-off . "#90959D")
+    (surface . "#F8F9FE") (divider . "#70767D"))
   "Revived light colors with no EBP role.")
 
 (defun orgzly-design-color (name &optional dark)
@@ -184,7 +186,10 @@ A string is a color, t a boolean, and a number a dimension."
        ("orgzly.overflow" . ,(orgzly-design--box :width 28.8))
        ;; Toolbar's overflow dots are the strong text color, the other
        ;; actions the secondary one.
-       ("orgzly.overflow.icon" . ,(orgzly-design--box :content_color (funcall c 'strong)))
+       ("orgzly.overflow.icon" . ,(orgzly-design--box :content_color (funcall c 'strong)
+                                                      :ripple_color (orgzly-design-ripple (funcall c 'strong)) :ripple_radius 20))
+       ;; Toolbar actions: AppCompat's borderless action ripple, 20dp.
+       ("orgzly.toolbar.action" . ,(orgzly-design--box :ripple_color (orgzly-design-ripple (funcall c 'strong)) :ripple_radius 20))
        ;; The overflow popup: it covers its button, 4dp from the edge, on the
        ;; menu surface; 48dp items with 16sp labels 16dp in.
        ("orgzly.menu" . ,(jetpacs-design-style
@@ -245,7 +250,8 @@ A string is a color, t a boolean, and a number a dimension."
                                                     :background_color (funcall c 'pill)))
        ("orgzly.fold" . ,(orgzly-design--box :min_width 0 :min_height 0 :padding_top 5))
        ;; FAB: 56dp, 16dp corners, 16dp from the edges.
-       ("orgzly.fab" . ,(orgzly-design--box :width 56 :height 56 :corner_radius 16
+       ("orgzly.fab" . ,(orgzly-design--box :width 56 :height 56 :corner_radius 16 :elevation 6
+                                            :ripple_color (orgzly-design-ripple (funcall c 'strong))
                                             :background_color (funcall c 'fab)
                                             :content_color (funcall c 'on-fab)))
        ;; Drawer: a 320dp NavigationView; its menu starts 8dp below the
@@ -358,9 +364,17 @@ A string is a color, t a boolean, and a number a dimension."
        ("orgzly.dialog.title" . ,(orgzly-design--box :padding_horizontal 24 :fill_width t))
        ("orgzly.t.dialog-title" . ,(orgzly-design--text 24 (funcall c 'strong)
                                                         `("letter_spacing" . ,(jetpacs-design-dimension 0.15))))
-       ("orgzly.dialog.item" . ,(orgzly-design--box :min_height 0 :fill_width t))
+       ("orgzly.t.dialog-message" . ,(orgzly-design--text 14 (funcall c 'text)))
+       ("orgzly.dialog.item" . ,(orgzly-design--box :min_height 0 :fill_width t :ripple_color (orgzly-design-ripple (funcall c 'strong))))
+       ;; Period pickers: an AppCompat AlertDialog under Material 3's dialog
+       ;; overlay, its two-line centred descriptions around three wheels.
+       ("orgzly.t.period-title" . ,(orgzly-design--text 20 (funcall c 'strong)))
+       ("orgzly.period.hint" . ,(orgzly-design--box :padding_horizontal 16 :height 35.5 :fill_width t))
+       ("orgzly.t.period-hint" . ,(orgzly-design--text 14 (funcall c 'text)
+                                                       `("text_align" . ,(jetpacs-design-text-align "center"))))
        ;; Text buttons: 48dp tall, at least 64dp wide, the label centred.
-       ("orgzly.dialog.button" . ,(orgzly-design--box :min_height 0 :min_width 0))
+       ("orgzly.dialog.button" . ,(orgzly-design--box :min_height 0 :min_width 0 :corner_radius 100
+                                                      :ripple_color (orgzly-design-ripple (funcall c 'strong))))
        ("orgzly.t.dialog-button" . ,(orgzly-design--text 14 (funcall c 'link)
                                                          `("font_weight" . ,(jetpacs-design-font-weight 500))
                                                          `("text_align" . ,(jetpacs-design-text-align "center"))))
@@ -374,7 +388,7 @@ A string is a color, t a boolean, and a number a dimension."
        ("orgzly.t.ts-label" . ,(orgzly-design--text 12 (funcall c 'text)
                                                     `("text_align" . ,(jetpacs-design-text-align "center"))))
        ;; 40dp: the 53px label block centred by its padding.
-       ("orgzly.ts.pill" . ,(orgzly-design--box :min_height 0 :corner_radius 100 :fill_width t
+       ("orgzly.ts.pill" . ,(orgzly-design--box :min_height 0 :corner_radius 100 :fill_width t :ripple_color (orgzly-design-ripple (funcall c 'strong))
                                                 :padding_horizontal 24 :padding_vertical 10.58
                                                 :background_color (funcall c 'pill)))
        ("orgzly.t.ts-pill" . ,(orgzly-design--text 14 (funcall c 'on-pill)
@@ -386,11 +400,16 @@ A string is a color, t a boolean, and a number a dimension."
        ("orgzly.ts.picker" . ,(jetpacs-design-style
                                (orgzly-design--pairs
                                 (list :min_height 40 :corner_radius 100 :padding_horizontal 24
-                                      :padding_vertical 7.1 :background_color (funcall c 'pill)))
+                                      :padding_vertical 7.1 :background_color (funcall c 'pill)
+                                      :ripple_color (orgzly-design-ripple (funcall c 'strong))
+                                      ;; Revived opens the platform's date and time dialogs.
+                                      :platform_dialog t))
                                :rules (list (jetpacs-design-rule
                                              "disabled"
+                                             ;; Revived greys the button by color, not opacity.
                                              `(("background_color"
-                                                . ,(jetpacs-design-color (funcall c 'pill-off))))))))
+                                                . ,(jetpacs-design-color (funcall c 'pill-off)))
+                                               ("alpha" . ,(jetpacs-design-number 1)))))))
        ("orgzly.t.ts-picker" . ,(jetpacs-design-style
                                  `(("font_size" . ,(jetpacs-design-dimension 14))
                                    ("line_height" . ,(jetpacs-design-dimension 16.355))
@@ -408,6 +427,7 @@ A string is a color, t a boolean, and a number a dimension."
        ("picker.container" . ("orgzly.ts.picker"))
        ("picker.label" . ("orgzly.t.ts-picker"))
        ("menu.trigger" . ("orgzly.overflow.icon"))
+       ("icon-button.container" . ("orgzly.toolbar.action"))
        ("menu.container" . ("orgzly.menu"))
        ("menu.item" . ("orgzly.menu.item"))
        ("menu.item-label" . ("orgzly.t.menu"))
@@ -420,6 +440,10 @@ A string is a color, t a boolean, and a number a dimension."
        ("section-header.title" . ("typography.label"))
        ("list-item.title" . ("typography.body"))
        ("list-item.subtitle" . ("typography.caption"))))))
+
+(defun orgzly-design-ripple (color)
+  "The touch ripple of Revived's Material 3 theme over COLOR: 14% of it."
+  (concat color "24"))
 
 (defun orgzly-design-register ()
   "Register both Orgzly style presets idempotently."
@@ -441,6 +465,18 @@ without a report it is the reference phone's."
         (h (orgzly-design--member window ":height_dp")))
     (if (not (and (numberp w) (numberp h))) 316.44
       (- (* w (if (>= (min w h) 600) 0.8 0.95)) 48))))
+
+(defun orgzly-design-sw600-p (window)
+  "Whether WINDOW, a `jetpacs-window' plist, is 600dp at its smallest.
+Android then takes Revived's values-sw600dp resources."
+  (let ((w (orgzly-design--member window ":width_dp"))
+        (h (orgzly-design--member window ":height_dp")))
+    (and (numberp w) (numberp h) (>= (min w h) 600))))
+
+(defun orgzly-design-fold-width (window)
+  "The outline's fold button width in dp for WINDOW, a `jetpacs-window' plist.
+Revived's fold_button_width is 48dp, and 60dp from a 600dp smallest width."
+  (if (orgzly-design-sw600-p window) 60 48))
 
 (defun orgzly-design-tags-scope (dark window clear child)
   "CHILD, the tags menu, under the scope of Revived's tags dropdown.
@@ -464,7 +500,9 @@ DARK's popup surface, with 48dp rows whose 16sp labels sit 8dp in."
                     `(("popup_overlap" . ,(jetpacs-design-boolean t))
                       ("popup_before_anchor" . ,(jetpacs-design-boolean t))))))
        ("orgzly.tags.item" . ,(orgzly-design--box :padding_horizontal 8 :min_height 48))
-       ("orgzly.tags.trigger" . ,(orgzly-design--box :content_color (funcall c 'text))))
+       ;; Revived's borderless 48dp ImageButton: a bounded ripple.
+       ("orgzly.tags.trigger" . ,(orgzly-design--box :content_color (funcall c 'text)
+                                                     :ripple_color (orgzly-design-ripple (funcall c 'strong)))))
      (list child)
      :component-styles
      (list (jetpacs-design-component-style "menu.container" '("orgzly.tags.menu"))
@@ -472,21 +510,30 @@ DARK's popup surface, with 48dp rows whose 16sp labels sit 8dp in."
            (jetpacs-design-component-style "menu.item-label" '("orgzly.t.menu"))
            (jetpacs-design-component-style "menu.trigger" '("orgzly.tags.trigger"))))))
 
-(defun orgzly-design-wrap-dialog (dialog dark)
-  "Wrap DIALOG like `orgzly-design-wrap' with DARK, sized for the window."
+(defun orgzly-design-wrap-dialog (dialog dark &optional sheet)
+  "Wrap DIALOG like `orgzly-design-wrap' with DARK, sized for the window.
+SHEET, when given, is the dialog sheet style instead."
   (let* ((active (jetpacs-design-active-profile))
          (profile (copy-tree (if (assoc "orgzly.card" (plist-get active :styles)) active
                                (jetpacs-design-profile-get (if dark "orgzly.dark" "orgzly.light")))))
+         (sheet-style sheet)
          (sheet (assoc "orgzly.dialog.sheet" (plist-get profile :styles))))
     (when sheet
-      (setcdr sheet (orgzly-design--dialog-sheet (orgzly-design-color 'dialog dark)
-                                                 (orgzly-design-dialog-width (jetpacs-window)))))
+      (setcdr sheet (or sheet-style
+                        (orgzly-design--dialog-sheet (orgzly-design-color 'dialog dark)
+                                                     (orgzly-design-dialog-width (jetpacs-window))))))
     (jetpacs-design-profile-scope profile (list dialog))))
 
-(defun orgzly-design--dialog-sheet (color width)
-  "The chrome.dialog style: a WIDTH dp AlertDialog in COLOR over a 0.32 dim."
+(defun orgzly-design-period-sheet (dark)
+  "The sheet of Revived's period pickers for DARK: 240dp, 4dp corners, surface."
+  (orgzly-design--dialog-sheet (orgzly-design-color 'surface dark) 240 4))
+
+(defun orgzly-design--dialog-sheet (color width &optional radius)
+  "The chrome.dialog style: a WIDTH dp AlertDialog in COLOR over a 0.32 dim.
+RADIUS is its corner radius, 28dp by default."
   (jetpacs-design-style
-   (append (orgzly-design--pairs (list :width width :corner_radius 28 :padding 0
+   (append (orgzly-design--pairs (list :width width :corner_radius (or radius 28) :padding 0
+                                       :elevation 6
                                        :background_color color))
            `(("alpha" . ,(jetpacs-design-number 0.32))))))
 

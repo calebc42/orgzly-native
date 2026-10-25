@@ -72,6 +72,18 @@
   "When non-nil, new notes are scheduled for today (Orgzly: set scheduled)."
   :type 'boolean :group 'orgzly)
 
+(defcustom orgzly-import-directory
+  (if (file-directory-p "/sdcard/Download") "/sdcard/Download" "~/Downloads")
+  "Directory whose Org files Import Org file offers."
+  :type 'directory :group 'orgzly)
+
+(defcustom orgzly-menu-extras t
+  "When non-nil, overflow menus add Orgzly Native's own items after Revived's.
+They are the theme switch, the way back to Jetpacs, and the note
+operations Revived offers in selection mode.  Nil shows Revived's menus
+exactly."
+  :type 'boolean :group 'orgzly)
+
 ;; ─── Books ───────────────────────────────────────────────────────────────────
 
 (defconst orgzly-data-max-books 64
