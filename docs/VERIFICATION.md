@@ -123,3 +123,5 @@ Gates: Orgzly ERT 90 passed (new: the dialog's round trip, the inserted
 timestamp's field reset, and the tags dropdown) with Checkdoc and
 warning-free compilation; Companion `testDebugUnitTest`,
 `testAndroidHostTest` and `jvmTest`; the full jetpacs-poc runner.
+
+Remaining differences are listed in [REVIVED-GAPS.md](REVIVED-GAPS.md).
