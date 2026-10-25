@@ -2,67 +2,419 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Package-Requires: ((emacs "30.1"))
 ;;; Commentary:
-;; App-owned palettes and density; all rendering uses reusable Foundation nodes.
+;; App-owned palettes and metrics; all rendering uses reusable Foundation nodes.
+;; The look is Orgzly Revived 1.23: Material 3 dynamic colors, elevated
+;; notebook cards, bulleted outline rows with indent guides, and a FAB.
+;; Metrics are the upstream layout dimensions (res/values/dimens.xml and the
+;; theme's font sizes).  Text styles reproduce TextView line metrics, so
+;; wrapped and single lines land where the upstream TextViews put them.
 ;;; Code:
+(require 'cl-lib)
 (require 'jetpacs-components)
 (require 'jetpacs-design-profiles)
 
-(defconst orgzly-design-light
-  '(("primary" . "#546E7A") ("on_primary" . "#FFFFFF")
-    ("secondary" . "#607D8B") ("on_secondary" . "#FFFFFF")
-    ("background" . "#FAFAFA") ("on_background" . "#212121")
-    ("surface" . "#FFFFFF") ("on_surface" . "#212121")
-    ("outline" . "#E0E0E0") ("error" . "#B71C1C")
-    ("on_error" . "#FFFFFF") ("success" . "#1B5E20") ("warning" . "#8D5900"))
-  "Orgzly light palette, derived from the upstream Android resources.")
 (defconst orgzly-design-dark
-  '(("primary" . "#B0BEC5") ("on_primary" . "#212121")
-    ("secondary" . "#90A4AE") ("on_secondary" . "#212121")
-    ("background" . "#212121") ("on_background" . "#FFFFFF")
-    ("surface" . "#242424") ("on_surface" . "#FFFFFF")
-    ("outline" . "#424242") ("error" . "#EF9A9A")
+  '(("primary" . "#B4C5FF") ("on_primary" . "#1A2D60")
+    ("secondary" . "#C1C5DD") ("on_secondary" . "#2B3042")
+    ("background" . "#121318") ("on_background" . "#E3E2E9")
+    ("surface" . "#121318") ("on_surface" . "#C9CAD4")
+    ("outline" . "#2F3034") ("error" . "#EF9A9A")
     ("on_error" . "#212121") ("success" . "#A5D6A7") ("warning" . "#FFCC80"))
-  "Orgzly dark palette with upstream light TODO and DONE colors.")
+  "Orgzly dark roles: Revived's dynamic dark scheme as drawn on the device.")
+
+(defconst orgzly-design-light
+  '(("primary" . "#4A5C92") ("on_primary" . "#FFFFFF")
+    ("secondary" . "#585E71") ("on_secondary" . "#FFFFFF")
+    ("background" . "#F8F9FE") ("on_background" . "#2D333A")
+    ("surface" . "#F8F9FE") ("on_surface" . "#5A6067")
+    ("outline" . "#DADBDF") ("error" . "#B71C1C")
+    ("on_error" . "#FFFFFF") ("success" . "#1B5E20") ("warning" . "#8D5900"))
+  "Orgzly light roles: Revived's dynamic light scheme as drawn on the Pixel Tablet.")
+
+(defconst orgzly-design-dark-colors
+  '((container . "#1A1B20") (strong . "#FCFAFF") (text . "#C9CAD4")
+    (guide . "#2F3034") (bullet . "#000000") (fab . "#7A90C8") (on-fab . "#000000")
+    (pill . "#8A90A5") (on-pill . "#000000") (dim . "#64656C")
+    (todo . "#EF9A9A") (done . "#A5D6A7") (link . "#B7CAFF") (hint . "#8F9096")
+    (dialog . "#282A2F") (header . "#C4CAE1") (menu . "#1E1F25") (dialog-hint . "#98999F")
+    (track-on . "#484A55") (track-off . "#5A5A5E") (thumb-on . "#C0C6DD") (thumb-off . "#B9B9B9")
+    (pill-off . "#414247") (on-pill-off . "#89898E"))
+  "Revived dark colors with no EBP role: containers, accents and states.")
+
+(defconst orgzly-design-light-colors
+  '((container . "#F1F4FA") (strong . "#2D333A") (text . "#5A6067")
+    (guide . "#DADBDF") (bullet . "#455362") (fab . "#A4CDF6") (on-fab . "#174567")
+    (pill . "#D5E4F7") (on-pill . "#455362") (dim . "#B1B5BA")
+    (todo . "#B71C1C") (done . "#1B5E20") (link . "#396286") (hint . "#ABADB3")
+    (dialog . "#E4E8F0") (header . "#4A5C92") (menu . "#EEEDF4") (dialog-hint . "#76777F")
+    (track-on . "#B4C5FF") (track-off . "#C6C6D0") (thumb-on . "#4A5C92") (thumb-off . "#ECECEC")
+    (pill-off . "#CDD2DA") (on-pill-off . "#90959D"))
+  "Revived light colors with no EBP role.")
+
+(defun orgzly-design-color (name &optional dark)
+  "Return Orgzly color NAME for DARK or the light palette."
+  (alist-get name (if dark orgzly-design-dark-colors orgzly-design-light-colors)))
+
+(defconst orgzly-design-density 2.8125
+  "Pixels per dp of the reference device the TextView metrics were measured on.")
+
+(defconst orgzly-design-text-metrics
+  '((24 91 80 9) (22 83 73 8) (16 61 53 6) (14 53 46 6) (12 46 40 6))
+  "TextView metrics in reference pixels: (SP SINGLE-LINE STEP TOP).
+SINGLE-LINE is a one-line TextView's height, STEP the distance between
+lines and TOP the font padding above the first line.  Measured from
+Revived's layout bounds and glyph positions; TextView rounds its font
+metrics to whole pixels, so these are not a fixed multiple of the size.")
+
+(defun orgzly-design--text (size color &rest more)
+  "A text style of SIZE sp in COLOR with TextView line metrics, plus MORE pairs.
+The line height is the TextView line step; the extra height of a single
+line is TextView's font padding, measured above and the rest below."
+  (pcase-let ((`(,_ ,single ,step ,top)
+               (or (assq size orgzly-design-text-metrics)
+                   (let ((px (* size orgzly-design-density)))
+                     (list size (* px 1.3553) (* px 1.1719) (* px 0.1503))))))
+    (apply #'orgzly-design--text-metrics size single step top color more)))
+
+(defun orgzly-design--text-metrics (size single step top color &rest more)
+  "A SIZE sp text style in COLOR from TextView metrics in reference pixels.
+SINGLE is a one-line height, STEP the line step and TOP the padding above
+the first line; MORE pairs follow."
+  (let* ((extra (- single step))
+         ;; Compose rounds a text block up to whole pixels, so a step
+         ;; below the font's natural height costs one pixel per block.
+         (overflow (max 0 (ceiling (- (* size orgzly-design-density 1.1719) step))))
+         ;; Truncate, so a dimension never lands a hair above its pixel
+         ;; and Compose's ceiling adds a whole one.
+         (dp (lambda (px) (/ (floor (* 1000 (/ px orgzly-design-density))) 1000.0))))
+    (jetpacs-design-style
+     `(("font_size" . ,(jetpacs-design-dimension size))
+       ("line_height" . ,(jetpacs-design-dimension (funcall dp step)))
+       ("padding_top" . ,(jetpacs-design-dimension (funcall dp (- (round top) overflow))))
+       ("padding_bottom" . ,(jetpacs-design-dimension (funcall dp (max 0 (- extra (round top))))))
+       ("content_color" . ,(jetpacs-design-color color))
+       ("paragraph_breaking" . ,(jetpacs-design-boolean t))
+       ,@more))))
+
+(defun orgzly-design--placeholder (size color &rest more)
+  "A SIZE sp placeholder style in COLOR on the TextView line step, plus MORE.
+It has no padding: the field's text style pads the whole field already,
+so a padded placeholder would make an empty field that much taller."
+  (let ((step (or (nth 2 (assq size orgzly-design-text-metrics))
+                  (* size orgzly-design-density 1.1719))))
+    (jetpacs-design-style
+     `(("font_size" . ,(jetpacs-design-dimension size))
+       ("line_height" . ,(jetpacs-design-dimension
+                          (/ (floor (* 1000 (/ step orgzly-design-density))) 1000.0)))
+       ("content_color" . ,(jetpacs-design-color color))
+       ,@more))))
+
+(defun orgzly-design--text-spaced (size single step top color)
+  "A SIZE sp text style in COLOR spaced like a TextView's line spacing.
+SINGLE is the one-line height, STEP the line step and TOP the padding
+above the first line, in reference pixels; each line's extra height goes
+below it and the last line drops it."
+  (let ((natural (ceiling (* size orgzly-design-density 1.1719)))
+        (dp (lambda (px) (/ (floor (* 1000 (/ px orgzly-design-density))) 1000.0))))
+    (jetpacs-design-style
+     `(("font_size" . ,(jetpacs-design-dimension size))
+       ("line_height" . ,(jetpacs-design-dimension (funcall dp step)))
+       ("line_spacing_below" . ,(jetpacs-design-boolean t))
+       ("padding_top" . ,(jetpacs-design-dimension (funcall dp top)))
+       ("padding_bottom" . ,(jetpacs-design-dimension (funcall dp (- single top natural))))
+       ("content_color" . ,(jetpacs-design-color color))
+       ("paragraph_breaking" . ,(jetpacs-design-boolean t))))))
+
+(defun orgzly-design--chromeless (&rest pairs)
+  "A text-field container style without border or fill, plus PAIRS.
+The border is zero wide, so it insets nothing, and transparent, because a
+zero width still draws a hairline; it stays so while focused."
+  (jetpacs-design-style
+   (orgzly-design--pairs (append '(:border_width 0 :border_color "#00000000" :corner_radius 0
+                                   :background_color "#00000000")
+                                 pairs))
+   :rules (list (jetpacs-design-rule "focused"
+                 `(("border_width" . ,(jetpacs-design-dimension 0))
+                   ("border_color" . ,(jetpacs-design-color "#00000000")))))))
+
+(defun orgzly-design--pairs (pairs)
+  "Style properties from keyword PAIRS (:property value).
+A string is a color, t a boolean, and a number a dimension."
+  (cl-loop for (key value) on pairs by #'cddr
+           collect (cons (substring (symbol-name key) 1)
+                         (cond ((stringp value) (jetpacs-design-color value))
+                               ((eq value t) (jetpacs-design-boolean t))
+                               (t (jetpacs-design-dimension value))))))
+
+(defun orgzly-design--box (&rest pairs)
+  "A style from keyword PAIRS (:property value) with dimension or color values."
+  (jetpacs-design-style (orgzly-design--pairs pairs)))
 
 (defun orgzly-design-profile (dark)
   "Build Orgzly's immutable Foundation profile, using DARK when non-nil."
   (let* ((palette (if dark orgzly-design-dark orgzly-design-light))
-         (roles (mapcar (lambda (p) (cons (car p) (jetpacs-design-color (cdr p)))) palette)))
+         (roles (mapcar (lambda (p) (cons (car p) (jetpacs-design-color (cdr p)))) palette))
+         (c (lambda (name) (orgzly-design-color name dark))))
     (jetpacs-design-make-profile
      (if dark "orgzly.dark" "orgzly.light") (if dark "Orgzly Dark" "Orgzly Light")
      :tokens roles :theme-roles roles
      :typography
-     '(("body" . (:family "system" :size 16 :weight 400 :line-height 22 :letter-spacing 0))
-       ("title" . (:family "system" :size 20 :weight 500 :line-height 28 :letter-spacing 0))
-       ("caption" . (:family "system" :size 13 :weight 400 :line-height 18 :letter-spacing 0))
+     '(("body" . (:family "system" :size 16 :weight 400 :line-height 18.75 :letter-spacing 0))
+       ("title" . (:family "system" :size 22 :weight 400 :line-height 28 :letter-spacing 0))
+       ("caption" . (:family "system" :size 14 :weight 400 :line-height 16.41 :letter-spacing 0))
        ("label" . (:family "system" :size 14 :weight 500 :line-height 20 :letter-spacing 0)))
      :styles
-     `(("orgzly.screen" . ,(jetpacs-design-style
-                            `(("background_color" . ,(jetpacs-design-token "surface"))
-                              ("content_color" . ,(jetpacs-design-token "on_surface"))
-                              ("fill_width" . ,(jetpacs-design-boolean t)))))
-       ("orgzly.toolbar" . ,(jetpacs-design-style
-                             `(("background_color" . ,(jetpacs-design-color (if dark "#292929" "#546E7A")))
-                               ("content_color" . ,(jetpacs-design-color "#FFFFFF"))
-                               ("padding_horizontal" . ,(jetpacs-design-dimension 8))
-                               ("min_height" . ,(jetpacs-design-dimension 56))
-                               ("fill_width" . ,(jetpacs-design-boolean t)))))
-       ("orgzly.row" . ,(jetpacs-design-style
-                         `(("corner_radius" . ,(jetpacs-design-dimension 0))
-                           ("padding_horizontal" . ,(jetpacs-design-dimension 12))
-                           ("padding_vertical" . ,(jetpacs-design-dimension 8))
-                           ("min_height" . ,(jetpacs-design-dimension 48))
-                           ("fill_width" . ,(jetpacs-design-boolean t)))
-                         :rules (list (jetpacs-design-rule "pressed"
-                                `(("background_color" . ,(jetpacs-design-token "outline")))))))
-       ("orgzly.done" . ,(jetpacs-design-style `(("alpha" . ,(jetpacs-design-number 0.55)))))
-       ("orgzly.form" . ,(jetpacs-design-style
-                          `(("padding" . ,(jetpacs-design-dimension 16))
-                            ("fill_width" . ,(jetpacs-design-boolean t))))))
+     `(;; Toolbar: M3 small top app bar title, 22sp regular.
+       ;; The 4.27dp start and 2.13dp top padding move the M3 title slot's
+       ;; text onto the AppCompat toolbar title's position; the end padding
+       ;; is the gap Toolbar leaves before its first action, and a long title
+       ;; is cut at a word as Toolbar cuts it.
+       ("orgzly.t.toolbar" . ,(jetpacs-design-style
+                               `(("padding_start" . ,(jetpacs-design-dimension 4.27))
+                                 ("padding_end" . ,(jetpacs-design-dimension 3.91))
+                                 ("padding_top" . ,(jetpacs-design-dimension 2.13))
+                                 ("font_size" . ,(jetpacs-design-dimension 22))
+                                 ("letter_spacing" . ,(jetpacs-design-dimension 0.12))
+                                 ("word_ellipsis" . ,(jetpacs-design-boolean t))
+                                 ("paragraph_breaking" . ,(jetpacs-design-boolean t))
+                                 ("line_height" . ,(jetpacs-design-dimension 28))
+                                 ("content_color" . ,(jetpacs-design-color (funcall c 'strong))))))
+       ;; The overflow trigger is as narrow as Revived's ActionButton.Overflow
+       ;; leaves its three dots from the screen edge.
+       ("orgzly.overflow" . ,(orgzly-design--box :width 28.8))
+       ;; Toolbar's overflow dots are the strong text color, the other
+       ;; actions the secondary one.
+       ("orgzly.overflow.icon" . ,(orgzly-design--box :content_color (funcall c 'strong)))
+       ;; The overflow popup: it covers its button, 4dp from the edge, on the
+       ;; menu surface; 48dp items with 16sp labels 16dp in.
+       ("orgzly.menu" . ,(jetpacs-design-style
+                          (append (orgzly-design--pairs
+                                   (list :background_color (funcall c 'menu) :border_width 0
+                                         :border_color "#00000000" :corner_radius 4
+                                         :padding_vertical 8 :min_width 196
+                                         :popup_edge_inset 4 :popup_offset_y 0.36))
+                                  `(("popup_overlap" . ,(jetpacs-design-boolean t))))))
+       ("orgzly.menu.item" . ,(orgzly-design--box :padding_horizontal 16 :min_height 48))
+       ("orgzly.t.menu" . ,(orgzly-design--text 16 (funcall c 'strong)
+                                                `("letter_spacing" . ,(jetpacs-design-dimension 0.5))))
+       ;; Notebook card: item_book.xml, an elevated M3 card 12dp below the
+       ;; previous one, 16dp from the screen edges, 16dp padding.
+       ("orgzly.card.margin" . ,(orgzly-design--box :padding_horizontal 16 :padding_top 12
+                                                    :fill_width t))
+       ("orgzly.card" . ,(orgzly-design--box :background_color (funcall c 'container)
+                                             :corner_radius 12 :padding 16 :fill_width t))
+       ;; Letter spacing reproduces the measured advance of the upstream
+       ;; TextAppearances (labelLarge carries 0.1sp).
+       ("orgzly.t.book" . ,(orgzly-design--text 24 (funcall c 'strong)
+                                                `("letter_spacing" . ,(jetpacs-design-dimension 0.11))))
+       ("orgzly.t.detail" . ,(orgzly-design--text 12 (funcall c 'text)
+                                                  `("letter_spacing" . ,(jetpacs-design-dimension 0.065))))
+       ;; BookItemInfoIcon: 14dp, 2dp start and 8dp end margins.
+       ("orgzly.detail.icon" . ,(orgzly-design--box :padding_start 2 :padding_end 8))
+       ("orgzly.details" . ,(orgzly-design--box :padding_top 8))
+       ;; Outline: item_head.xml at the comfortable density.
+       ("orgzly.t.preface" . ,(orgzly-design--text 16 (funcall c 'text)))
+       ("orgzly.preface" . ,(orgzly-design--box :padding_horizontal 16 :padding_vertical 8
+                                                :fill_width t))
+       ("orgzly.t.title" . ,(orgzly-design--text 16 (funcall c 'text)))
+       ("orgzly.t.content" . ,(orgzly-design--text 14 (funcall c 'text)))
+       ("orgzly.t.fold" . ,(orgzly-design--text 16 (funcall c 'text)
+                                                `("text_align" . ,(jetpacs-design-text-align "center"))))
+       ;; Fixed sizes inside the row are universal attributes, not style
+       ;; widths: Foundation Styles sizes do not report intrinsic width.
+       ("orgzly.row.box" . ,(orgzly-design--box :fill_width t :intrinsic_height t))
+       ("orgzly.result.box" . ,(orgzly-design--box :padding_horizontal 16 :fill_width t
+                                                   :intrinsic_height t))
+       ;; Rows are as dense as Revived's (31.6dp for one line): an authored
+       ;; minimum height lifts the pressable's 48dp default.
+       ("orgzly.head" . ,(jetpacs-design-style
+                          `(("padding_vertical" . ,(jetpacs-design-dimension 5))
+                            ("min_height" . ,(jetpacs-design-dimension 0)))
+                          :rules (list (jetpacs-design-rule "pressed"
+                                 `(("background_color" . ,(jetpacs-design-color (funcall c 'container))))))))
+       ("orgzly.faded" . ,(jetpacs-design-style `(("alpha" . ,(jetpacs-design-number 0.45)))))
+       ;; Android truncates the 2dp offset to 5 reference pixels.
+       ("orgzly.below-title" . ,(orgzly-design--box :padding_top 1.78))
+       ;; indent.xml: a 20dp slot with a 1dp VerticalDivider centred in it.
+       ("orgzly.guide.line" . ,(orgzly-design--box :background_color (funcall c 'guide)))
+       ;; The bullet's 20dp slot is the first line's height, its 8dp dot centred.
+       ("orgzly.bullet.dot" . ,(orgzly-design--box :corner_radius 4
+                                                   :background_color (funcall c 'bullet)))
+       ;; bullet_folded.xml: the dot on a secondary-container disc.
+       ("orgzly.bullet.ring" . ,(orgzly-design--box :corner_radius 8
+                                                    :background_color (funcall c 'pill)))
+       ("orgzly.fold" . ,(orgzly-design--box :min_width 0 :min_height 0 :padding_top 5))
+       ;; FAB: 56dp, 16dp corners, 16dp from the edges.
+       ("orgzly.fab" . ,(orgzly-design--box :width 56 :height 56 :corner_radius 16
+                                            :background_color (funcall c 'fab)
+                                            :content_color (funcall c 'on-fab)))
+       ;; Drawer: a 320dp NavigationView; its menu starts 8dp below the
+       ;; status bar with 48dp rows, the active one a pill inset 12dp.
+       ("orgzly.drawer.sheet" . ,(orgzly-design--box :width 320
+                                                     :background_color (funcall c 'container)))
+       ;; DrawerLayout's default scrim, 60% black.
+       ("orgzly.scrim" . ,(orgzly-design--box :background_color "#99000000"))
+       ("orgzly.drawer" . ,(orgzly-design--box :padding_top 8 :fill_width t))
+       ("orgzly.drawer.margin" . ,(orgzly-design--box :padding_horizontal 11.29 :fill_width t))
+       ("orgzly.drawer.item" . ,(orgzly-design--box :min_height 0 :padding_horizontal 16.58
+                                                    :fill_width t))
+       ("orgzly.drawer.active" . ,(orgzly-design--box :min_height 0 :corner_radius 24
+                                                      :background_color (funcall c 'pill)
+                                                      :content_color (funcall c 'on-pill)
+                                                      :padding_horizontal 16.58 :fill_width t))
+       ("orgzly.drawer.plain" . ,(orgzly-design--box :min_height 0))
+       ;; The Sync footer: a 24dp icon 16dp from the edge, 12dp above the bottom.
+       ("orgzly.drawer.footer" . ,(orgzly-design--box :padding_start 16 :padding_bottom 12
+                                                      :fill_width t))
+       ("orgzly.t.drawer" . ,(orgzly-design--text 14 (funcall c 'text)
+                                                  `("font_weight" . ,(jetpacs-design-font-weight 500))
+                                                  `("letter_spacing" . ,(jetpacs-design-dimension 0.1))))
+       ("orgzly.form" . ,(orgzly-design--box :padding 16 :fill_width t))
+       ;; Note screen: fragment_note.xml.
+       ("orgzly.t.value" . ,(orgzly-design--text 16 (funcall c 'text)))
+       ;; Breadcrumbs: 16sp at lineSpacingMultiplier 1.25, 61px for one
+       ;; line and 66px more for each further one.
+       ("orgzly.t.bread" . ,(orgzly-design--text-spaced 16 61 66 6 (funcall c 'text)))
+       ("orgzly.t.hint" . ,(orgzly-design--text 16 (funcall c 'hint)))
+       ("orgzly.note.bread" . ,(orgzly-design--box :min_height 48 :padding_horizontal 16
+                                                   :padding_vertical 12))
+       ("orgzly.divider" . ,(orgzly-design--box :fill_width t :background_color (funcall c 'guide)))
+       ("orgzly.note.header" . ,(orgzly-design--box :min_height 0 :fill_width t))
+       ("orgzly.note.value" . ,(orgzly-design--box :min_height 0 :fill_width t))
+       ("orgzly.note.title-view" . ,(orgzly-design--box :min_height 0 :fill_width t
+                                                        :padding_horizontal 16 :padding_vertical 6))
+       ("orgzly.note.content-view" . ,(orgzly-design--box :min_height 0 :fill_width t
+                                                          :padding_horizontal 16 :padding_vertical 6))
+       ;; Chromeless fields shaped like the upstream TextViews.
+       ("orgzly.field.title.box" . ,(orgzly-design--chromeless
+                                                        :padding_horizontal 16 :padding_vertical 6))
+       ;; font_large 22sp; the measured advance needs 0.15sp of letter spacing.
+       ("orgzly.field.title.text" . ,(orgzly-design--text 22 (funcall c 'text)
+                                                          `("min_height" . ,(jetpacs-design-dimension 0))
+                                                          `("letter_spacing" . ,(jetpacs-design-dimension 0.15))))
+       ("orgzly.field.title.hint" . ,(orgzly-design--placeholder 22 (funcall c 'hint)
+                                                          `("letter_spacing" . ,(jetpacs-design-dimension 0.15))))
+       ("orgzly.field.value.box" . ,(orgzly-design--chromeless :padding 0))
+       ;; A centred field sits lower than the EditText, so its text pads 5px.
+       ("orgzly.field.value.text" . ,(orgzly-design--text-metrics 16 61 53 5 (funcall c 'text)
+                                                                  `("min_height" . ,(jetpacs-design-dimension 0))))
+       ("orgzly.field.value.hint" . ,(orgzly-design--text-metrics 16 61 53 5 (funcall c 'hint)))
+       ("orgzly.field.search.box" . ,(orgzly-design--chromeless :padding 0))
+       ("orgzly.field.search.text" . ,(orgzly-design--text-metrics 22 83 73 8 (funcall c 'strong)
+                                                                   `("min_height" . ,(jetpacs-design-dimension 0))))
+       ("orgzly.field.search.hint" . ,(orgzly-design--text-metrics 22 83 73 8 (funcall c 'hint)))
+       ;; Searches: a saved query's 18sp name over its 14sp query.
+       ("orgzly.search.row" . ,(orgzly-design--box :padding_horizontal 16 :padding_vertical 6
+                                                   :fill_width t))
+       ("orgzly.t.search-name" . ,(orgzly-design--text-metrics 18 69 60 7 (funcall c 'text)))
+       ;; Agenda day dividers: bold 14sp on the container band.
+       ("orgzly.band" . ,(orgzly-design--box :background_color (funcall c 'container)
+                                             :padding_horizontal 16 :fill_width t))
+       ("orgzly.t.band" . ,(orgzly-design--text 14 (funcall c 'text)
+                                                `("font_weight" . ,(jetpacs-design-font-weight 700))))
+       ;; Settings: PreferenceFragment rows, 72dp text start, 16dp padding.
+       ("orgzly.pref" . ,(orgzly-design--box :min_height 0 :fill_width t :padding_vertical 16
+                                             :padding_start 72 :padding_end 16))
+       ;; The 24dp icon would otherwise stretch a 16dp-padded row.
+       ("orgzly.pref.category" . ,(orgzly-design--box :min_height 0 :fill_width t
+                                                      :padding_vertical 14.58 :padding_end 16))
+       ;; titleMedium and bodyMedium: 0.15sp and 0.25sp of letter spacing,
+       ;; a wrapped summary 20sp a line.
+       ("orgzly.t.pref-title" . ,(orgzly-design--text 16 (funcall c 'strong)
+                                                      `("font_weight" . ,(jetpacs-design-font-weight 500))
+                                                      `("letter_spacing" . ,(jetpacs-design-dimension 0.15))))
+       ("orgzly.t.summary" . ,(orgzly-design--text-metrics 14 53 56 6 (funcall c 'text)
+                                                           `("letter_spacing" . ,(jetpacs-design-dimension 0.25))))
+       ("orgzly.pref.header" . ,(orgzly-design--box :padding_start 72 :padding_top 16 :fill_width t))
+       ("orgzly.t.pref-header" . ,(orgzly-design--text 14 (funcall c 'header)
+                                                       `("font_weight" . ,(jetpacs-design-font-weight 500))))
+       ;; The AppCompat switch's track and thumb, on and off.
+       ("orgzly.switch.track-on" . ,(orgzly-design--box :corner_radius 6.75
+                                                        :background_color (funcall c 'track-on)))
+       ("orgzly.switch.track-off" . ,(orgzly-design--box :corner_radius 6.75
+                                                         :background_color (funcall c 'track-off)))
+       ("orgzly.switch.thumb-on" . ,(orgzly-design--box :corner_radius 9.75
+                                                        :background_color (funcall c 'thumb-on)))
+       ("orgzly.switch.thumb-off" . ,(orgzly-design--box :corner_radius 9.75
+                                                         :background_color (funcall c 'thumb-off)))
+       ;; The dialog's EditText: 16dp in, hint at 4dp, a 2dp focused underline.
+       ("orgzly.dialog.input" . ,(orgzly-design--box :padding_horizontal 16 :fill_width t))
+       ("orgzly.dialog.underline" . ,(orgzly-design--box :fill_width t
+                                                         :background_color (funcall c 'header)))
+       ("orgzly.field.dialog.box" . ,(orgzly-design--chromeless :padding_start 4.27 :padding_top 7.46
+                                                                :padding_bottom 1.42))
+       ("orgzly.field.dialog.text" . ,(orgzly-design--text-metrics 18 68 60 7 (funcall c 'strong)
+                                                                   `("min_height" . ,(jetpacs-design-dimension 0))))
+       ("orgzly.field.dialog.hint" . ,(orgzly-design--text-metrics 18 68 60 7 (funcall c 'dialog-hint)))
+       ("orgzly.field.content.box" . ,(orgzly-design--chromeless
+                                                          :padding_horizontal 16 :padding_vertical 6))
+       ("orgzly.field.content.text" . ,(orgzly-design--text 16 (funcall c 'text)
+                                                            `("min_height" . ,(jetpacs-design-dimension 0))))
+       ("orgzly.field.content.hint" . ,(orgzly-design--placeholder 16 (funcall c 'hint)))
+       ;; Dialogs: the 316dp AlertDialog, drawn by the host through chrome.dialog.
+       ;; alpha is the window's dim behind it: the AlertDialog's 0.32.
+       ("orgzly.dialog.sheet" . ,(orgzly-design--dialog-sheet (funcall c 'dialog) 316.44))
+       ("orgzly.dialog" . ,(orgzly-design--box :fill_width t))
+       ("orgzly.dialog.title" . ,(orgzly-design--box :padding_horizontal 24 :fill_width t))
+       ("orgzly.t.dialog-title" . ,(orgzly-design--text 24 (funcall c 'strong)
+                                                        `("letter_spacing" . ,(jetpacs-design-dimension 0.15))))
+       ("orgzly.dialog.item" . ,(orgzly-design--box :min_height 0 :fill_width t))
+       ;; Text buttons: 48dp tall, at least 64dp wide, the label centred.
+       ("orgzly.dialog.button" . ,(orgzly-design--box :min_height 0 :min_width 0))
+       ("orgzly.t.dialog-button" . ,(orgzly-design--text 14 (funcall c 'link)
+                                                         `("font_weight" . ,(jetpacs-design-font-weight 500))
+                                                         `("text_align" . ,(jetpacs-design-text-align "center"))))
+       ;; Timestamp dialog: dialog_timestamp.xml under its 16dp edge, a
+       ;; 36dp bold heading, 12sp caps labels and 40dp tonal buttons.
+       ("orgzly.ts.head" . ,(orgzly-design--box :padding 16 :fill_width t))
+       ("orgzly.t.ts-title" . ,(orgzly-design--text 18 (funcall c 'text)
+                                                    `("font_weight" . ,(jetpacs-design-font-weight 700))
+                                                    `("text_align" . ,(jetpacs-design-text-align "center"))))
+       ("orgzly.ts.body" . ,(orgzly-design--box :padding 16 :fill_width t))
+       ("orgzly.t.ts-label" . ,(orgzly-design--text 12 (funcall c 'text)
+                                                    `("text_align" . ,(jetpacs-design-text-align "center"))))
+       ;; 40dp: the 53px label block centred by its padding.
+       ("orgzly.ts.pill" . ,(orgzly-design--box :min_height 0 :corner_radius 100 :fill_width t
+                                                :padding_horizontal 24 :padding_vertical 10.58
+                                                :background_color (funcall c 'pill)))
+       ("orgzly.t.ts-pill" . ,(orgzly-design--text 14 (funcall c 'on-pill)
+                                                   `("font_weight" . ,(jetpacs-design-font-weight 500))
+                                                   `("letter_spacing" . ,(jetpacs-design-dimension 0.1))
+                                                   `("text_align" . ,(jetpacs-design-text-align "center"))))
+       ;; The date and time buttons, drawn by the Companion's picker face;
+       ;; a time too wide for its half wraps, 46px a line.
+       ("orgzly.ts.picker" . ,(jetpacs-design-style
+                               (orgzly-design--pairs
+                                (list :min_height 40 :corner_radius 100 :padding_horizontal 24
+                                      :padding_vertical 7.1 :background_color (funcall c 'pill)))
+                               :rules (list (jetpacs-design-rule
+                                             "disabled"
+                                             `(("background_color"
+                                                . ,(jetpacs-design-color (funcall c 'pill-off))))))))
+       ("orgzly.t.ts-picker" . ,(jetpacs-design-style
+                                 `(("font_size" . ,(jetpacs-design-dimension 14))
+                                   ("line_height" . ,(jetpacs-design-dimension 16.355))
+                                   ("font_weight" . ,(jetpacs-design-font-weight 500))
+                                   ("letter_spacing" . ,(jetpacs-design-dimension 0.1))
+                                   ("text_align" . ,(jetpacs-design-text-align "center"))
+                                   ("max_lines" . ,(jetpacs-design-number 3))
+                                   ("content_color" . ,(jetpacs-design-color (funcall c 'on-pill))))
+                                 :rules (list (jetpacs-design-rule
+                                               "disabled"
+                                               `(("content_color"
+                                                  . ,(jetpacs-design-color (funcall c 'on-pill-off)))))))))
      :component-styles
-     '(("text.body" . ("typography.body")) ("text.title" . ("typography.title"))
+     '(("chrome.drawer" . ("orgzly.drawer.sheet"))
+       ("picker.container" . ("orgzly.ts.picker"))
+       ("picker.label" . ("orgzly.t.ts-picker"))
+       ("menu.trigger" . ("orgzly.overflow.icon"))
+       ("menu.container" . ("orgzly.menu"))
+       ("menu.item" . ("orgzly.menu.item"))
+       ("menu.item-label" . ("orgzly.t.menu"))
+       ("chrome.scrim" . ("orgzly.scrim"))
+       ("chrome.dialog" . ("orgzly.dialog.sheet"))
+       ("text.body" . ("typography.body")) ("text.title" . ("typography.title"))
        ("text.caption" . ("typography.caption")) ("text.label" . ("typography.label"))
-       ("list-item.container" . ("orgzly.row"))
        ("text-field.label" . ("typography.caption"))
        ("text-field.text" . ("typography.body"))
        ("section-header.title" . ("typography.label"))
@@ -73,10 +425,45 @@
   "Register both Orgzly style presets idempotently."
   (dolist (dark '(nil t)) (jetpacs-design-register-profile (orgzly-design-profile dark))))
 
+(defun orgzly-design--member (plist name)
+  "The value of the key named NAME in PLIST, interned or not."
+  (cl-loop for (key value) on plist by #'cddr
+           when (equal (symbol-name key) name) return value))
+
+(defun orgzly-design-dialog-width (window)
+  "The AlertDialog width in dp for WINDOW, a `jetpacs-window' plist.
+AppCompat sizes a dialog to its minimum width, 95% of a phone window or 80%
+from a 600dp smallest width, less the 24dp background inset on each side;
+without a report it is the reference phone's."
+  ;; By name: EBP decodes a member Emacs never interned as a fresh
+  ;; symbol, so `plist-get' misses it when the report predates this file.
+  (let ((w (orgzly-design--member window ":width_dp"))
+        (h (orgzly-design--member window ":height_dp")))
+    (if (not (and (numberp w) (numberp h))) 316.44
+      (- (* w (if (>= (min w h) 600) 0.8 0.95)) 48))))
+
+(defun orgzly-design-wrap-dialog (dialog dark)
+  "Wrap DIALOG like `orgzly-design-wrap' with DARK, sized for the window."
+  (let* ((active (jetpacs-design-active-profile))
+         (profile (copy-tree (if (assoc "orgzly.card" (plist-get active :styles)) active
+                               (jetpacs-design-profile-get (if dark "orgzly.dark" "orgzly.light")))))
+         (sheet (assoc "orgzly.dialog.sheet" (plist-get profile :styles))))
+    (when sheet
+      (setcdr sheet (orgzly-design--dialog-sheet (orgzly-design-color 'dialog dark)
+                                                 (orgzly-design-dialog-width (jetpacs-window)))))
+    (jetpacs-design-profile-scope profile (list dialog))))
+
+(defun orgzly-design--dialog-sheet (color width)
+  "The chrome.dialog style: a WIDTH dp AlertDialog in COLOR over a 0.32 dim."
+  (jetpacs-design-style
+   (append (orgzly-design--pairs (list :width width :corner_radius 28 :padding 0
+                                       :background_color color))
+           `(("alpha" . ,(jetpacs-design-number 0.32))))))
+
 (defun orgzly-design-wrap (screen dark)
   "Wrap SCREEN in the selected profile, defaulting to DARK's Orgzly preset."
   (let* ((active (jetpacs-design-active-profile))
-         (profile (if (assoc "orgzly.row" (plist-get active :styles)) active
+         (profile (if (assoc "orgzly.card" (plist-get active :styles)) active
                     (jetpacs-design-profile-get (if dark "orgzly.dark" "orgzly.light")))))
     (jetpacs-design-profile-scope profile (list screen))))
 

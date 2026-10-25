@@ -15,8 +15,26 @@
   "The notebook whose outline screen is on the stack, or nil.
 Its visible rows are the surface data document (SPEC 13.8.5).")
 (defvar orgzly-state-query "" "The active bounded dotted search query.")
-(defvar orgzly-state-dark nil "Non-nil selects the dark Orgzly preset.")
+(defvar orgzly-state-dark t "Non-nil selects the dark Orgzly preset.")
 (defvar orgzly-state-page 0 "Zero-based page in the active outline or search.")
+(defvar orgzly-state-draft nil
+  "The open note's picked values, saved by Done.
+A plist (:scope FORM-ID [:state S] [:priority P] [:scheduled RAW]
+[:deadline RAW]), each value a string, empty when cleared.")
+(defvar orgzly-state-ts nil
+  "The open timestamp dialog's parts, or nil.
+A plist (:scope FORM-ID :field FIELD :date YYYY-MM-DD :time HH:MM
+:end HH:MM :repeater COOKIE :delay COOKIE :time-on B :end-on B
+:repeater-on B :delay-on B :seq N :dialog-id ID); FIELD is \"scheduled\",
+\"deadline\", or \"title\" or \"content\" for an inserted timestamp,
+which also carries the field's captured :text.")
+(defvar orgzly-state-searching nil
+  "Non-nil while the toolbar shows Revived's search field.")
+(defvar orgzly-state-editing nil
+  "The open note's fields edited in place: (:scope FORM-ID :fields LIST).
+Revived shows title and content as text until tapped.")
+(defvar orgzly-state-note-folds nil
+  "Collapsed note sections: a list of the symbols `metadata' and `content'.")
 (defconst orgzly-state-page-size 40 "Maximum note rows emitted per screen.")
 (defcustom orgzly-saved-searches
   '(("Agenda" . ".it.done ad.7") ("Next 3 days" . ".it.done s.ge.today ad.3")

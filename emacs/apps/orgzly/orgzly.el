@@ -10,6 +10,7 @@
 (require 'orgzly-reminders)
 (require 'jetpacs-apps)
 (require 'jetpacs-shell)
+(require 'jetpacs-dialog-slot)
 
 (defvar orgzly--timers nil "Pending app-owned navigation and refresh timers.")
 
@@ -26,7 +27,7 @@
 
 (defun orgzly--open (route &optional child)
   "Schedule ROUTE on Orgzly's surface; CHILD retains the current parent screen."
-  (setq orgzly-state-page 0)
+  (setq orgzly-state-page 0 orgzly-state-searching nil)
   ;; The data document follows the outline screen on the stack.
   (setq orgzly-state-outline
         (pcase (plist-get route :kind)
@@ -76,10 +77,18 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
 (defun orgzly--on-open (args _params)
   "Open the fixed app destination requested by ARGS."
   (let ((kind (cdr (assoc (plist-get args :view)
-                          '(("books" . books) ("agenda" . agenda) ("search" . search)
+                          '(("books" . books) ("searches" . searches) ("search" . searches)
                             ("settings" . settings) ("new-book" . new-book)
                             ("save-search" . save-search))))))
-    (if kind (orgzly--open (list :kind kind)) 'rejected)))
+    (cond
+     ((and (equal (plist-get args :view) "settings") (plist-get args :page))
+      (if (assoc (plist-get args :page) orgzly-ui-settings)
+          (orgzly--open (list :kind 'settings :page (plist-get args :page)) t)
+        'rejected))
+     ((equal (plist-get args :view) "agenda")
+      (orgzly--open (list :kind 'query :name "Agenda" :query ".it.done ad.7")))
+     (kind (orgzly--open (list :kind kind)))
+     (t 'rejected))))
 
 (defun orgzly--on-refresh (_args _params)
   "Refresh all bounded notebooks and schedule presentation."
@@ -102,12 +111,10 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
        (orgzly--open (list :kind 'book-edit :id (alist-get 'id book)) t)))))
 
 (defun orgzly--on-note-open (args _params)
-  "Open the exact current note identified by ARGS.
-A literal row names the note in `:id'; a templated outline row carries
-no id of its own and the Companion injects the item's key as `:item'."
+  "Open the exact current note identified by ARGS' `:id'."
   (orgzly--guard
    (lambda ()
-     (let ((entry (orgzly-state-resolve (or (plist-get args :id) (plist-get args :item)) t)))
+     (let ((entry (orgzly-state-resolve (plist-get args :id) t)))
        (unless (alist-get 'pos entry) (error "Expected a note"))
        (orgzly--open (list :kind 'note :id (alist-get 'id entry)) t)))))
 
@@ -130,56 +137,61 @@ no id of its own and the Companion injects the item's key as `:item'."
        (orgzly--open (list :kind 'new-note :book (alist-get 'name book)
                            :book-id (alist-get 'id book) :parent-id (alist-get 'id entry)) t)))))
 
-(defun orgzly--outline-shape ()
-  "Return what decides the outline screen's shape beyond its rows."
-  (let ((count (length (orgzly-state-visible (orgzly-state-entries orgzly-state-outline)))))
-    (list (car (orgzly-ui-page-window count)) (> count orgzly-state-page-size)
-          (null (orgzly-state-entries orgzly-state-outline)))))
-
-(defun orgzly--present-outline (shape)
-  "Present the outline after a change: patch `/rows' when SHAPE still holds.
-SHAPE is `orgzly--outline-shape' from before the change.  Bindings
-change values, never the tree: while the pager and the empty notice are
-as they were, the rows are synced in place (SPEC 13.8.5): the shell
-diffs them by note id against the rows it last sent and patches only the
-changed icon and the rows that left or entered (`insert', amendment
-#196), or sets `/rows' when that is smaller; otherwise the screen is
-re-pushed whole."
-  (if (equal shape (orgzly--outline-shape))
-      (let ((rows (orgzly-ui-outline-rows orgzly-state-outline)))
-        (orgzly--later
-         (lambda () (jetpacs-shell-data-sync "orgzly" "/rows" rows :key "id"))))
-    (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))))
+(defun orgzly--present-outline ()
+  "Re-push the outline after a fold change."
+  (orgzly--later (lambda () (jetpacs-shell-push "orgzly"))))
 
 (defun orgzly--toggle-fold (id)
   "Toggle the fold of note ID in the explicit fold state."
   (setq orgzly-state-folded (if (member id orgzly-state-folded)
                                 (delete id orgzly-state-folded) (cons id orgzly-state-folded))))
 
-(defun orgzly--on-note-tap (args _params)
-  "Act on the templated outline row whose item key ARGS carries as `:item'.
-A note with children folds or unfolds, patching the rows in place; a
-leaf opens its note.  The row has one action for every item because a
-template's shape cannot vary per row (SPEC 13.8.5)."
-  (orgzly--guard
-   (lambda ()
-     (let* ((entry (orgzly-state-resolve (plist-get args :item))) (id (alist-get 'id entry)))
-       (unless (alist-get 'pos entry) (error "Expected a note"))
-       (if (not (alist-get 'has-children entry))
-           (orgzly--open (list :kind 'note :id id) t)
-         (let ((shape (orgzly--outline-shape)))
-           (orgzly--toggle-fold id)
-           (orgzly--present-outline shape))
-         'accepted)))))
-
 (defun orgzly--on-fold (args _params)
   "Toggle the snapshot note fold named by ARGS without reading disk."
   (orgzly--guard
    (lambda ()
-     (let* ((entry (orgzly-state-resolve (plist-get args :id))) (id (alist-get 'id entry)))
+     (let* ((entry (orgzly-state-resolve (plist-get args :id)))
+            (id (alist-get 'id entry)))
        (unless (alist-get 'pos entry) (error "Expected a note"))
        (orgzly--toggle-fold id)
-       (orgzly--later (lambda () (jetpacs-shell-push "orgzly"))) 'accepted))))
+       (orgzly--present-outline)
+       'accepted))))
+
+(defun orgzly--on-link-open (args _params)
+  "Open the link ARGS name by note, field and index in the snapshot.
+The device never sends a target: it names the note's `:id', the
+`:field' (\"title\" or \"content\") and the `:link' index, and the
+target is read back from the snapshot.  Only web and mail addresses
+open, through `browse-url'."
+  (orgzly--guard
+   (lambda ()
+     (let* ((entry (orgzly-state-resolve (plist-get args :id)))
+            (text (pcase (plist-get args :field)
+                    ("title" (alist-get 'title entry))
+                    ("content" (string-trim (or (alist-get 'content entry) "")))))
+            (index (plist-get args :link))
+            (links (and text (seq-filter #'cdr (orgzly-ui-link-segments text))))
+            (target (and (natnump index) (cdr (nth index links)))))
+       (if (and target (string-match-p "\\`\\(?:https?\\|mailto\\):" target))
+           (progn (browse-url target) 'accepted)
+         'rejected)))))
+
+(defun orgzly--on-fold-all (_args _params)
+  "Cycle the open outline as Revived's Fold/Unfold All does.
+Anything folded unfolds everything; otherwise every foldable note folds."
+  (orgzly--guard
+   (lambda ()
+     (let ((entries (orgzly-state-entries orgzly-state-outline)))
+       (setq orgzly-state-folded
+             (if (cl-some (lambda (e) (member (alist-get 'id e) orgzly-state-folded)) entries)
+                 (cl-remove-if (lambda (id) (cl-find id entries :key (lambda (e) (alist-get 'id e))
+                                                      :test #'equal))
+                               orgzly-state-folded)
+               (append (mapcar (lambda (e) (alist-get 'id e))
+                               (cl-remove-if-not #'orgzly-ui--foldable-p entries))
+                       orgzly-state-folded)))
+       (orgzly--present-outline)
+       'accepted))))
 
 (defun orgzly--planning (text)
   "Parse validated Org timestamp TEXT into lossless planning parts."
@@ -207,16 +219,25 @@ template's shape cannot vary per row (SPEC 13.8.5)."
             (book (if entry (orgzly-state-book (alist-get 'book entry))
                     (orgzly-state-resolve (plist-get args :book-id) t)))
             (parent (when (plist-get args :parent-id) (orgzly-state-resolve (plist-get args :parent-id) t)))
-            (title (orgzly--field params "oz-title")) (state (orgzly--field params "oz-state"))
-            (priority (orgzly--field params "oz-priority")) (tags (orgzly--field params "oz-tags"))
-            (content (orgzly--field params "oz-content" 64000))
-            (scheduled (orgzly--planning (orgzly--field params "oz-scheduled")))
-            (deadline (orgzly--planning (orgzly--field params "oz-deadline")))
+            (title (or (orgzly--field-maybe params "oz-title") (alist-get 'title entry) ""))
+            (state (orgzly--note-input params "state" entry))
+            (priority (orgzly--note-input params "priority" entry))
+            (tags (orgzly--field params "oz-tags"))
+            (content (let ((v (plist-get (plist-get params :fields)
+                                         (intern (concat ":" (orgzly-field-id "oz-content"))))))
+                       (if (and (stringp v) (<= (string-bytes v) 64000)) v
+                         (or (alist-get 'content entry) ""))))
+            (scheduled (orgzly--planning (orgzly--note-input params "scheduled" entry)))
+            (deadline (orgzly--planning (orgzly--note-input params "deadline" entry)))
+            (prop-name (string-trim (or (orgzly--field-maybe params "oz-prop-name") "")))
+            (prop-value (string-trim (or (orgzly--field-maybe params "oz-prop-value") "")))
             (name (alist-get 'name book)))
        (unless (and name (not (string-empty-p (string-trim title)))
                     (not (string-match-p "[\n\r]" title))
                     (or (string-empty-p priority) (string-match-p "\\`[A-C]\\'" priority))
-                    (or (null parent) (equal name (alist-get 'book parent))))
+                    (or (null parent) (equal name (alist-get 'book parent)))
+                    (or (string-empty-p prop-name)
+                        (string-match-p "\\`[^[:space:]:]+\\'" prop-name)))
          (error "Invalid note fields"))
        (with-current-buffer (orgzly-data--book-buffer name)
          (unless (or (string-empty-p state) (member state org-todo-keywords-1))
@@ -231,9 +252,282 @@ template's shape cannot vary per row (SPEC 13.8.5)."
              (orgzly-data-set-planning entry 'scheduled scheduled)
              (orgzly-data-set-planning entry 'deadline deadline)
              (orgzly-data-set-state entry state)
-             (orgzly-data-set-title entry title))
+             (orgzly-data-set-title entry title)
+             (unless (string-empty-p prop-name)
+               (orgzly-data-set-property entry prop-name prop-value)))
            (save-buffer)))
+       (setq orgzly-state-draft nil orgzly-state-editing nil)
        (orgzly--committed (list :kind 'book :book name))))))
+
+(defun orgzly--field-maybe (params id)
+  "Return captured field ID from PARAMS, or nil when it was not captured."
+  (let ((value (plist-get (plist-get params :fields)
+                          (intern (concat ":" (orgzly-field-id id))))))
+    (and (stringp value) (<= (string-bytes value) 2048) value)))
+
+(defun orgzly--note-input (params field entry)
+  "FIELD of the note being saved: `oz-FIELD' captured in PARAMS, else the draft.
+Without either it is ENTRY's own value, so an untouched field is kept."
+  (or (orgzly--field-maybe params (concat "oz-" field))
+      (orgzly-ui-note-value field entry)))
+
+(defvar orgzly--reset-fields nil
+  "Logical note fields the next draft push re-seeds from the draft.")
+
+(defun orgzly--draft-put (scope field value)
+  "Record picked FIELD VALUE for the note form SCOPE and re-present it.
+Fields in `orgzly--reset-fields' drop their typed drafts for the new value."
+  (unless (equal (plist-get orgzly-state-draft :scope) scope)
+    (setq orgzly-state-draft (list :scope scope)))
+  (setq orgzly-state-draft (plist-put orgzly-state-draft (intern (concat ":" field)) value))
+  (let ((reset (let ((orgzly-field-scope scope)) (mapcar #'orgzly-field-id orgzly--reset-fields))))
+    (setq orgzly--reset-fields nil)
+    (orgzly--later (lambda () (jetpacs-shell-push "orgzly" :reset-input-ids reset)))))
+
+(defun orgzly--on-note-section (args _params)
+  "Fold or unfold the note screen's ARGS `:section'."
+  (let ((section (pcase (plist-get args :section) ("metadata" 'metadata) ("content" 'content))))
+    (if (null section) 'rejected
+      (setq orgzly-state-note-folds
+            (if (memq section orgzly-state-note-folds) (delq section orgzly-state-note-folds)
+              (cons section orgzly-state-note-folds)))
+      (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))
+      'accepted)))
+
+(defun orgzly--on-note-edit (args _params)
+  "Switch ARGS' `:field' of the open note form `:scope' to in-place editing."
+  (let ((field (plist-get args :field)) (scope (plist-get args :scope)))
+    (if (not (and (member field '("title" "content")) (stringp scope))) 'rejected
+      (unless (equal (plist-get orgzly-state-editing :scope) scope)
+        (setq orgzly-state-editing (list :scope scope :fields nil)))
+      (cl-pushnew field (plist-get orgzly-state-editing :fields) :test #'equal)
+      (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))
+      'accepted)))
+
+(defun orgzly--on-note-clear (args _params)
+  "Clear the picked value ARGS name in the open note's draft."
+  (let ((field (plist-get args :field)) (scope (plist-get args :scope)))
+    (if (not (and (member field '("state" "priority" "scheduled" "deadline")) (stringp scope)))
+        'rejected
+      (orgzly--draft-put scope field "")
+      'accepted)))
+
+(defun orgzly--pick-choices (field)
+  "The choices offered when picking FIELD."
+  (pcase field
+    ("state" (let ((kws (orgzly-data-todo-keywords))) (append (car kws) (cdr kws))))
+    ("priority" (mapcar #'char-to-string (number-sequence org-priority-highest org-priority-lowest)))))
+
+(defun orgzly--on-note-pick (args _params)
+  "Open the picker for ARGS' note `:field' in form `:scope'.
+State and priority offer their values; scheduled and deadline take an Org
+timestamp.  The result lands in the draft, and Done saves it."
+  (let* ((field (plist-get args :field)) (scope (plist-get args :scope))
+         (title (pcase field ("state" "State") ("priority" "Priority")
+                       ("scheduled" "Scheduled time") ("deadline" "Deadline time"))))
+    (cond
+     ((not (and title (stringp scope))) 'rejected)
+     ((member field '("scheduled" "deadline"))
+      (orgzly--ts-open scope field (plist-get args :raw))
+      'accepted)
+     (t
+      (with-jetpacs-owner "orgzly"
+        (jetpacs-dialog-slot-show
+         (jetpacs-wire-id "pick" field)
+         (orgzly-design-wrap-dialog
+          (orgzly-ui-picker-dialog field title (orgzly--pick-choices field)
+                                   (plist-get orgzly-state-draft (intern (concat ":" field))))
+          orgzly-state-dark)
+         :on-conclude
+         (lambda (status result _error)
+           (when (equal status "submitted")
+             (let ((value (or (plist-get result :value)
+                              (plist-get (plist-get result :fields)
+                                         (intern (concat ":" (jetpacs-wire-id "pick-ts" field)))))))
+               (cond
+                ((equal value "__clear__") (orgzly--draft-put scope field ""))
+                ((and (member field '("state" "priority"))
+                      (member value (orgzly--pick-choices field)))
+                 (orgzly--draft-put scope field value))
+                ((and (member field '("scheduled" "deadline")) (stringp value)
+                      (ignore-errors (orgzly--planning value)))
+                 (orgzly--draft-put scope field
+                                    (if (string-prefix-p "<" value) value (concat "<" value ">"))))))))))
+      'accepted))))
+
+;;; The timestamp dialog
+
+(defconst orgzly--ts-time-re "\\`\\([0-9]\\{1,2\\}\\):\\([0-9][0-9]\\)\\'"
+  "A clock time as Org writes it.")
+(defconst orgzly--ts-repeater-re "\\`\\(?:\\.\\+\\|\\+\\+\\|\\+\\)[0-9]\\{1,4\\}[hdwmy]\\'"
+  "A repeater cookie the dialog writes.")
+(defconst orgzly--ts-delay-re "\\`--?[0-9]\\{1,4\\}[hdwmy]\\'"
+  "A delay or warning-period cookie the dialog writes.")
+
+(defun orgzly--ts-hm (time)
+  "TIME as zero-padded HH:MM, or nil."
+  (when (and (stringp time) (string-match orgzly--ts-time-re time))
+    (format "%02d:%s" (string-to-number (match-string 1 time)) (match-string 2 time))))
+
+(defun orgzly--ts-seed (raw)
+  "The dialog's parts for Org timestamp RAW, or for now when RAW is empty.
+Unset parts keep Revived's defaults: the current time, `.+1w' and `-1d',
+unchecked."
+  (let* ((now (format-time-string "%H:%M"))
+         (parts (list :date (format-time-string "%Y-%m-%d") :time now :end now
+                      :repeater ".+1w" :delay "-1d")))
+    (when (and (stringp raw) (string-match "\\`[<[]\\(.*\\)[]>]\\'" raw))
+      (dolist (token (split-string (match-string 1 raw) " " t))
+        (cond
+         ((string-match-p "\\`[0-9]\\{4\\}-[0-9][0-9]-[0-9][0-9]\\'" token)
+          (setq parts (plist-put parts :date token)))
+         ((string-match "\\`\\([0-9:]+\\)\\(?:-\\([0-9:]+\\)\\)?\\'" token)
+          ;; Both groups first: `orgzly--ts-hm' matches again.
+          (let* ((groups (list (match-string 1 token) (match-string 2 token)))
+                 (start (orgzly--ts-hm (car groups)))
+                 (end (orgzly--ts-hm (cadr groups))))
+            (when start
+              (setq parts (plist-put (plist-put parts :time start) :time-on t))
+              (setq parts (plist-put parts :end (or end start)))
+              (when end (setq parts (plist-put parts :end-on t))))))
+         ((string-match-p orgzly--ts-repeater-re token)
+          (setq parts (plist-put (plist-put parts :repeater token) :repeater-on t)))
+         ((string-match-p orgzly--ts-delay-re token)
+          (setq parts (plist-put (plist-put parts :delay token) :delay-on t))))))
+    parts))
+
+(defun orgzly--ts-string (ts)
+  "The active Org timestamp TS's checked parts spell."
+  (let ((time (encode-time (parse-time-string (concat (plist-get ts :date) " 00:00:00")))))
+    (concat "<" (plist-get ts :date) " " (format-time-string "%a" time)
+            (when (plist-get ts :time-on)
+              (concat " " (plist-get ts :time)
+                      (when (plist-get ts :end-on) (concat "-" (plist-get ts :end)))))
+            (when (plist-get ts :repeater-on) (concat " " (plist-get ts :repeater)))
+            (when (plist-get ts :delay-on) (concat " " (plist-get ts :delay)))
+            ">")))
+
+(defun orgzly--ts-merge-checks (fields)
+  "Fold the captured checkbox FIELDS into `orgzly-state-ts'."
+  (dolist (check orgzly-ui-ts-checks)
+    (let ((value (plist-get fields (intern (concat ":" (orgzly-ui-ts-check-id check))))))
+      (when (memq value '(t :json-false))
+        (setq orgzly-state-ts (plist-put orgzly-state-ts (intern (format ":%s" check))
+                                         (eq value t)))))))
+
+(defun orgzly--ts-show ()
+  "Show `orgzly-state-ts' as the timestamp dialog, under a fresh id.
+A pick re-shows it, so the request it replaces concludes unanswered."
+  (let* ((seq (1+ (or (plist-get orgzly-state-ts :seq) 0)))
+         (id (jetpacs-wire-id "ts" (number-to-string seq))))
+    (setq orgzly-state-ts (plist-put (plist-put orgzly-state-ts :seq seq) :dialog-id id))
+    (with-jetpacs-owner "orgzly"
+      (jetpacs-dialog-slot-show
+       id (orgzly-design-wrap-dialog (orgzly-ui-timestamp-dialog orgzly-state-ts) orgzly-state-dark)
+       :on-conclude
+       (lambda (status result _error)
+         (when (and (equal status "submitted")
+                    (equal (plist-get orgzly-state-ts :dialog-id) id))
+           (orgzly--ts-merge-checks (plist-get result :fields))
+           (orgzly--ts-conclude (plist-get result :value))))))))
+
+(defun orgzly--ts-conclude (value)
+  "Apply the timestamp dialog's submitted VALUE: \"set\" or \"clear\"."
+  (let* ((ts orgzly-state-ts)
+         (field (plist-get ts :field))
+         (scope (plist-get ts :scope))
+         (stamp (orgzly--ts-string ts)))
+    (setq orgzly-state-ts nil)
+    (pcase field
+      ((or "scheduled" "deadline")
+       (orgzly--draft-put scope field (if (equal value "set") stamp "")))
+      ((or "title" "content")
+       (when (equal value "set")
+         (let ((text (or (plist-get ts :text) "")))
+           (setq orgzly--reset-fields (list (concat "oz-" field)))
+           (orgzly--draft-put scope field
+                              (concat text (unless (or (string-empty-p text)
+                                                       (string-suffix-p " " text))
+                                             " ")
+                                      stamp))))))))
+
+(defun orgzly--ts-open (scope field raw &optional text)
+  "Open the timestamp dialog for FIELD of form SCOPE, seeded from RAW.
+TEXT is the captured text an inserted timestamp is appended to."
+  (setq orgzly-state-ts (append (list :scope scope :field field :text text)
+                                (orgzly--ts-seed raw)))
+  (orgzly--ts-show))
+
+(defun orgzly--on-ts-part (args params)
+  "Set ARGS' `:part' of the open timestamp dialog and show it again.
+Picks inject `:value'; the shortcuts name their day.  Every action
+captures the checkboxes into PARAMS, so a re-show keeps what the user
+ticked, and must come from the dialog on screen."
+  (let* ((part (plist-get args :part))
+         (value (plist-get args :value))
+         (today (format-time-string "%Y-%m-%d"))
+         (day (lambda (n) (format-time-string "%Y-%m-%d" (time-add nil (days-to-time n))))))
+    (cond
+     ((null orgzly-state-ts) 'stale)
+     ((not (equal (plist-get params :dialog_id) (plist-get orgzly-state-ts :dialog-id))) 'stale)
+     (t
+      (orgzly--ts-merge-checks (plist-get params :fields))
+      (let ((set (lambda (&rest pairs)
+                   (cl-loop for (k v) on pairs by #'cddr
+                            do (setq orgzly-state-ts (plist-put orgzly-state-ts k v))))))
+        (pcase part
+          ("date" (if (and (stringp value)
+                           (string-match-p "\\`[0-9]\\{4\\}-[0-9][0-9]-[0-9][0-9]\\'" value))
+                      (funcall set :date value)
+                    (setq part nil)))
+          ("today" (funcall set :date today))
+          ("tomorrow" (funcall set :date (funcall day 1)))
+          ("week" (funcall set :date (funcall day 7)))
+          ;; Picking a time uses it, as Revived's dialog does.
+          ("time" (if (orgzly--ts-hm value) (funcall set :time (orgzly--ts-hm value) :time-on t)
+                    (setq part nil)))
+          ("end" (if (orgzly--ts-hm value) (funcall set :end (orgzly--ts-hm value) :end-on t)
+                   (setq part nil)))
+          ("checks" nil)
+          ((or "repeater" "delay") (orgzly--ts-cookie part) (setq part 'asked))
+          (_ (setq part nil))))
+      (cond ((null part) 'rejected)
+            ((eq part 'asked) 'accepted)
+            (t (orgzly--later #'orgzly--ts-show) 'accepted))))))
+
+(defun orgzly--ts-cookie (part)
+  "Ask for the timestamp dialog's repeater or delay PART, then return to it."
+  (let* ((key (intern (concat ":" part)))
+         (title (if (equal part "repeater") "Repeater" "Delay")))
+    (orgzly--later
+     (lambda ()
+       (with-jetpacs-owner "orgzly"
+         (jetpacs-dialog-slot-show
+          (jetpacs-wire-id "ts-cookie" part)
+          (orgzly-design-wrap-dialog (orgzly-ui-text-dialog title (plist-get orgzly-state-ts key))
+                              orgzly-state-dark)
+          :on-conclude
+          (lambda (status result _error)
+            (when orgzly-state-ts
+              (let ((value (plist-get (plist-get result :fields) :oz-setting)))
+                (when (and (equal status "submitted") (stringp value)
+                           (string-match-p (if (equal part "repeater") orgzly--ts-repeater-re
+                                             orgzly--ts-delay-re)
+                                           value))
+                  (setq orgzly-state-ts (plist-put (plist-put orgzly-state-ts key value)
+                                                   (intern (concat key "-on")) t))))
+              (orgzly--later #'orgzly--ts-show)))))))))
+
+(defun orgzly--on-note-timestamp (args params)
+  "Insert a timestamp into the edited field of form ARGS' `:scope'.
+Revived's toolbar button: content while PARAMS capture it, else the
+title, whose captured text the timestamp is appended to."
+  (let* ((scope (plist-get args :scope))
+         (orgzly-field-scope scope)
+         (field (if (orgzly--field-maybe params "oz-content") "content" "title")))
+    (if (not (stringp scope)) 'rejected
+      (orgzly--ts-open scope field "" (orgzly--field-maybe params (concat "oz-" field)))
+      'accepted)))
 
 (defun orgzly--on-operate (args _params)
   "Commit the closed structural operation in ARGS to its current note."
@@ -306,9 +600,10 @@ template's shape cannot vary per row (SPEC 13.8.5)."
   "Run ARGS' injected query or captured PARAMS against the snapshot."
   (orgzly--guard
    (lambda ()
-     (let ((orgzly-field-scope (orgzly-field-scope '(:kind search))))
+     (let ((orgzly-field-scope (or (and (stringp (plist-get args :scope)) (plist-get args :scope))
+                                   (orgzly-field-scope '(:kind search)))))
        (setq orgzly-state-query (orgzly--check-query (or (plist-get args :value) (orgzly--field params "oz-query" 512)))))
-     (orgzly--open '(:kind search)))))
+     (orgzly--open (list :kind 'query :query orgzly-state-query)))))
 
 (defun orgzly--on-saved (args _params)
   "Run the bounded saved query named by ARGS."
@@ -317,7 +612,7 @@ template's shape cannot vary per row (SPEC 13.8.5)."
      (let ((query (cdr (assoc (plist-get args :name) (plist-get orgzly-state :searches)))))
        (unless query (signal 'orgzly-stale nil))
        (setq orgzly-state-query (orgzly--check-query query))
-       (orgzly--open '(:kind search))))))
+       (orgzly--open (list :kind 'query :name (plist-get args :name) :query query))))))
 
 (defun orgzly--save-searches (searches)
   "Persist validated SEARCHES before replacing the live snapshot."
@@ -336,7 +631,7 @@ template's shape cannot vary per row (SPEC 13.8.5)."
        (when (string-empty-p (string-trim name)) (error "Search name is required"))
        (setf (alist-get name searches nil nil #'equal) query)
        (orgzly--save-searches searches)
-       (orgzly--open '(:kind search))))))
+       (orgzly--open '(:kind searches))))))
 
 (defun orgzly--on-search-delete (args _params)
   "Persist removal of the search named by ARGS after confirmation."
@@ -344,7 +639,83 @@ template's shape cannot vary per row (SPEC 13.8.5)."
    (lambda ()
      (unless (assoc (plist-get args :name) orgzly-saved-searches) (signal 'orgzly-stale nil))
      (orgzly--save-searches (assoc-delete-all (plist-get args :name) (copy-tree orgzly-saved-searches)))
-     (orgzly--open '(:kind search)))))
+     (orgzly--open '(:kind searches)))))
+
+(defun orgzly--setting-item (name)
+  "The settings item whose variable is named NAME, or nil."
+  (cl-loop for page in orgzly-ui-settings
+           thereis (cl-loop for (_header . items) in (nthcdr 3 page)
+                            thereis (cl-find-if (lambda (item)
+                                                  (and (memq (car item) '(boolean string))
+                                                       (equal (symbol-name (nth 2 item)) name)))
+                                                items))))
+
+(defun orgzly--save-setting (var value)
+  "Save VAR as VALUE through Customize and re-present the screen."
+  (customize-save-variable var value)
+  (orgzly--later (lambda () (jetpacs-shell-push "orgzly"))))
+
+(defun orgzly--on-setting (args _params)
+  "Toggle ARGS' boolean setting, or ask for its new string value.
+Only variables listed in variable `orgzly-ui-settings' can be named."
+  (let ((item (orgzly--setting-item (plist-get args :name))))
+    (pcase item
+      ('nil 'rejected)
+      (`(boolean ,_ ,var . ,_) (orgzly--save-setting var (not (symbol-value var))) 'accepted)
+      (`(string ,title ,var)
+       (with-jetpacs-owner "orgzly"
+         (jetpacs-dialog-slot-show
+          (jetpacs-wire-id "setting" (symbol-name var))
+          (orgzly-design-wrap-dialog (orgzly-ui-text-dialog title (format "%s" (symbol-value var)))
+                              orgzly-state-dark)
+          :on-conclude
+          (lambda (status result _error)
+            (let ((value (plist-get (plist-get result :fields) :oz-setting)))
+              (when (and (equal status "submitted") (stringp value)
+                         (<= (length value) 512) (not (string-match-p "[\n\r]" value)))
+                (orgzly--save-setting var value))))))
+       'accepted))))
+
+(defun orgzly--create-book (name)
+  "Create the empty notebook NAME and present the refreshed notebook list."
+  (orgzly--guard
+   (lambda ()
+     (let ((file (orgzly-data-book-file (string-trim name))))
+       (when (string-empty-p (string-trim name)) (error "Notebook name is required"))
+       (when (file-exists-p file) (error "Notebook already exists"))
+       (make-directory (file-name-directory file) t)
+       (write-region "" nil file nil 'silent nil 'excl)
+       (orgzly--committed '(:kind books))))))
+
+(defun orgzly--on-book-new (_args _params)
+  "Ask for a new notebook's name, as Revived's New notebook dialog does."
+  (with-jetpacs-owner "orgzly"
+    (jetpacs-dialog-slot-show
+     "new-book"
+     (orgzly-design-wrap-dialog (orgzly-ui-name-dialog "New notebook" "Name" "Create") orgzly-state-dark)
+     :on-conclude
+     (lambda (status result _error)
+       (let ((name (plist-get (plist-get result :fields) :oz-dialog-name)))
+         (when (and (equal status "submitted") (stringp name) (<= (length name) 512))
+           (orgzly--create-book name))))))
+  'accepted)
+
+(defun orgzly--on-search-open (_args _params)
+  "Show the toolbar's search field on the current screen."
+  (setq orgzly-state-searching t)
+  (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))
+  'accepted)
+
+(defun orgzly--on-search-close (_args _params)
+  "Close the toolbar's search field."
+  (setq orgzly-state-searching nil)
+  (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))
+  'accepted)
+
+(defun orgzly--on-search-help (_args _params)
+  "Open the search documentation Revived's help button links to."
+  (browse-url "https://www.orgzlyrevived.com/docs#search")
+  'accepted)
 
 (defun orgzly--on-page (args _params)
   "Select ARGS' bounded result page and refresh presentation."
@@ -363,10 +734,9 @@ template's shape cannot vary per row (SPEC 13.8.5)."
   (orgzly-design-register)
   (with-jetpacs-owner "orgzly"
     (jetpacs-chrome-define-root "orgzly" "books"
-                                (lambda (back) (orgzly-ui-screen '(:kind books) back)) :required t
-                                :data-builder #'orgzly-ui-document)
+                                (lambda (back) (orgzly-ui-screen '(:kind books) back)) :required t)
     (jetpacs-defaction "orgzly.home" #'orgzly--on-home :doc "Refresh and open Orgzly notebooks")
-    (jetpacs-defaction "orgzly.open" #'orgzly--on-open :doc "Open an Orgzly destination" :args '((:name view :type "enum" :required t)))
+    (jetpacs-defaction "orgzly.open" #'orgzly--on-open :doc "Open an Orgzly destination, a settings page by its page name" :args '((:name view :type "enum" :required t) (:name page :type "string")))
     (jetpacs-defaction "orgzly.refresh" #'orgzly--on-refresh :doc "Refresh the bounded Orgzly notebook snapshot")
     (jetpacs-defaction "orgzly.book.open" #'orgzly--on-book-open :doc "Open the notebook represented by an opaque revision id" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.book.edit" #'orgzly--on-book-edit :doc "Open notebook metadata for an opaque revision id" :args '((:name id :type "ref" :required t)))
@@ -375,18 +745,30 @@ template's shape cannot vary per row (SPEC 13.8.5)."
     (jetpacs-defaction "orgzly.note.open" #'orgzly--on-note-open :doc "Open the note represented by an opaque revision id" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.new" #'orgzly--on-note-new :doc "Open a new-note form in the current notebook" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.child" #'orgzly--on-note-child :doc "Open a child-note form under the current note" :args '((:name id :type "ref" :required t)))
-    (jetpacs-defaction "orgzly.note.fold" #'orgzly--on-fold :doc "Toggle the current outline note's descendants" :args '((:name id :type "ref" :required t)))
-    (jetpacs-defaction "orgzly.note.tap" #'orgzly--on-note-tap :doc "Fold or unfold the tapped outline note, or open a leaf; the row's item key is injected")
+    (jetpacs-defaction "orgzly.note.fold" #'orgzly--on-fold :doc "Toggle the current outline note's descendants and content" :args '((:name id :type "ref" :required t)))
+    (jetpacs-defaction "orgzly.note.section" #'orgzly--on-note-section :doc "Fold or unfold the note screen's metadata or content" :args '((:name section :type "enum" :required t)))
+    (jetpacs-defaction "orgzly.note.edit" #'orgzly--on-note-edit :doc "Edit the open note's title or content in place" :args '((:name field :type "enum" :required t) (:name scope :type "string" :required t)))
+    (jetpacs-defaction "orgzly.note.clear" #'orgzly--on-note-clear :doc "Clear a picked value of the open note" :args '((:name field :type "enum" :required t) (:name scope :type "string" :required t)))
+    (jetpacs-defaction "orgzly.ts.part" #'orgzly--on-ts-part :doc "Set a part of the open timestamp dialog: its day, times, cookies or checkboxes" :args '((:name part :type "enum" :required t)))
+    (jetpacs-defaction "orgzly.note.timestamp" #'orgzly--on-note-timestamp :doc "Insert a picked timestamp into the open note's edited title or content" :args '((:name scope :type "string" :required t)))
+    (jetpacs-defaction "orgzly.note.pick" #'orgzly--on-note-pick :doc "Pick the open note's state, priority or planning time" :args '((:name field :type "enum" :required t) (:name scope :type "string" :required t) (:name raw :type "string")))
+    (jetpacs-defaction "orgzly.link.open" #'orgzly--on-link-open :doc "Open a note's web or mail link, named by note, field and index" :args '((:name id :type "ref" :required t) (:name field :type "enum" :required t) (:name link :type "integer" :required t)))
+    (jetpacs-defaction "orgzly.fold.all" #'orgzly--on-fold-all :doc "Unfold the open outline when anything is folded, else fold every foldable note")
     (jetpacs-defaction "orgzly.note.save" #'orgzly--on-note-save :doc "Commit captured note fields before accepting the edit" :args '((:name id :type "ref") (:name book-id :type "ref") (:name parent-id :type "ref")))
     (jetpacs-defaction "orgzly.note.operate" #'orgzly--on-operate :doc "Commit a closed structural operation to the current note" :args '((:name id :type "ref" :required t) (:name operation :type "enum" :required t)))
-    (jetpacs-defaction "orgzly.search.run" #'orgzly--on-search :doc "Run the captured bounded dotted query")
+    (jetpacs-defaction "orgzly.search.run" #'orgzly--on-search :doc "Run the captured bounded dotted query from the form named by scope" :args '((:name scope :type "string")))
     (jetpacs-defaction "orgzly.search.saved" #'orgzly--on-saved :doc "Run a named saved query" :args '((:name name :type "string" :required t)))
+    (jetpacs-defaction "orgzly.book.new" #'orgzly--on-book-new :doc "Ask for and create a new notebook")
+    (jetpacs-defaction "orgzly.setting" #'orgzly--on-setting :doc "Toggle or edit one listed Orgzly setting" :args '((:name name :type "string" :required t)))
+    (jetpacs-defaction "orgzly.search.open" #'orgzly--on-search-open :doc "Show the toolbar search field")
+    (jetpacs-defaction "orgzly.search.close" #'orgzly--on-search-close :doc "Close the toolbar search field")
+    (jetpacs-defaction "orgzly.search.help" #'orgzly--on-search-help :doc "Open the search query documentation")
     (jetpacs-defaction "orgzly.search.save" #'orgzly--on-search-save :doc "Persist a captured named query")
     (jetpacs-defaction "orgzly.search.delete" #'orgzly--on-search-delete :doc "Remove a confirmed saved query" :args '((:name name :type "string" :required t)))
     (jetpacs-defaction "orgzly.page" #'orgzly--on-page :doc "Select a bounded outline or search page" :args '((:name page :type "integer" :required t)))
     (jetpacs-defaction "orgzly.theme" #'orgzly--on-theme :doc "Toggle Orgzly light and dark appearance"))
   (jetpacs-defapp "orgzly" :label "Orgzly" :icon "book" :surfaces '("orgzly")
-                  :chrome 'primary :dock-core nil :home-route "books" :order 46
+                  :chrome 'standalone :home-route "books" :order 46
                   :destinations '((:key "books" :label "Notebooks" :icon "book"
                                     :verb "orgzly.home"))
                   :requires-extensions '("jetpacs.components" "jetpacs.design"))

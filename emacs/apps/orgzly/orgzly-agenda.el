@@ -86,6 +86,12 @@ unless NO-OVERDUE."
           ;; Catch up to the window, keeping one overdue base if applicable.
           (when (and (< occ window-start) (not no-overdue))
             (push occ out))
+          ;; Fixed-length units jump straight to the window: stepping a
+          ;; two-day repeater from a base years back would exhaust the guard.
+          (when-let* ((len (pcase (car rep) ('hour 3600) ('day 86400) ('week 604800)))
+                      (step (* len (cdr rep)))
+                      ((< occ window-start)))
+            (setq occ (+ occ (* step (floor (- window-start occ) step)))))
           (while (and (< occ window-start) (< guard 1000))
             (setq occ (orgzly-agenda--step occ (car rep) (cdr rep))
                   guard (1+ guard)))
@@ -98,7 +104,7 @@ unless NO-OVERDUE."
 
 (defun orgzly-agenda-items (entries query ctx &optional now)
   "Expand QUERY's hits from ENTRIES into agenda items.
-Returns a list of item alists sorted by (day, time):
+Returns a list of item alists in Orgzly's agenda order:
   ((day . FLOAT midnight) (time . FLOAT) (kind . scheduled|deadline|event)
    (overdue-days . INT|nil) (entry . ENTRY))
 Days span QUERY's ad.N (default 1) from today; overdue occurrences
@@ -148,11 +154,23 @@ collapse into today."
                     (time . ,occ) (kind . event) (overdue-days . nil)
                     (entry . ,entry))
                   items)))))
-    (sort (nreverse items)
-          (lambda (a b)
-            (or (< (alist-get 'day a) (alist-get 'day b))
-                (and (= (alist-get 'day a) (alist-get 'day b))
-                     (< (alist-get 'time a) (alist-get 'time b))))))))
+    ;; Orgzly fills each day in the query's note order, today's overdue
+    ;; occurrences first and a note's scheduled time before its deadline;
+    ;; it never sorts a day by time.
+    (let ((rank (lambda (it)
+                  (list (alist-get 'day it)
+                        (if (alist-get 'overdue-days it) 0 1)
+                        (cl-position (alist-get 'entry it) hits :test #'eq)
+                        (pcase (alist-get 'kind it) ('scheduled 0) ('deadline 1) (_ 2))
+                        (alist-get 'time it)))))
+      (sort (nreverse items)
+            (lambda (a b)
+              (let ((ra (funcall rank a)) (rb (funcall rank b)) (result nil) (done nil))
+                (while (and ra (not done))
+                  (cond ((< (car ra) (car rb)) (setq result t done t))
+                        ((> (car ra) (car rb)) (setq done t)))
+                  (setq ra (cdr ra) rb (cdr rb)))
+                result))))))
 
 (defun orgzly-agenda-day-groups (entries query ctx &optional now)
   "Group ENTRIES matching QUERY in CTX at NOW per day.
@@ -169,10 +187,9 @@ them); `orgzly-agenda-sections' splits them out Orgzly-style."
                             (lambda (it) (= (alist-get 'day it) day))
                             items)))))
 
-(defcustom orgzly-agenda-group-scheduled-with-today nil
-  "When non-nil, overdue scheduled notes group under Today.
-Otherwise every overdue occurrence sits in the leading Overdue section,
-as Orgzly does."
+(defcustom orgzly-agenda-group-scheduled-with-today t
+  "When non-nil, overdue scheduled notes group under Today, as Orgzly does.
+Otherwise every overdue occurrence sits in the leading Overdue section."
   :type 'boolean :group 'orgzly)
 
 (defun orgzly-agenda-sections (entries query ctx &optional now)

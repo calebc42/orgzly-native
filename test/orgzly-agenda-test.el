@@ -53,6 +53,18 @@
                            occs)
                    '("07-09" "07-16")))))
 
+(ert-deftest orgzly-agenda-occurrence-repeater-from-years-back ()
+  "A short repeater with a base years back still lands in the window,
+on its own grid, as Getting Started's .+2d note does in Revived."
+  (let* ((ws (orgzly-agenda--day-start 0 orgzly-agenda-test--now))
+         (we (orgzly-agenda--day-start 7 orgzly-agenda-test--now))
+         ;; 2015-02-16 + 2n days: 4161 days to 2026-07-09 is odd, so the
+         ;; grid hits Jul 10, 12, 14.
+         (rep (orgzly-agenda-test--ts 2015 2 16 nil nil ".+2d"))
+         (occs (orgzly-agenda--occurrences rep ws we t)))
+    (should (equal (mapcar (lambda (o) (format-time-string "%m-%d" (seconds-to-time o))) occs)
+                   '("07-10" "07-12" "07-14")))))
+
 (ert-deftest orgzly-agenda-occurrence-monthly-repeater ()
   (let* ((ws (orgzly-agenda--day-start 0 orgzly-agenda-test--now))
          (we (orgzly-agenda--day-start 60 orgzly-agenda-test--now))

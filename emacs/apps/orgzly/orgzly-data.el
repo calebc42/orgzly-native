@@ -433,6 +433,11 @@ Point must be at a heading start; leaves point unchanged."
            (closed (orgzly-data--parse-ts (org-entry-get nil "CLOSED")))
            (created (orgzly-data--parse-ts
                      (org-entry-get nil orgzly-created-property)))
+           (properties (cl-remove-if
+                        (lambda (p) (member (car p) '("CATEGORY" "BLOCKED" "FILE" "PRIORITY"
+                                                      "ITEM" "TODO" "ALLTAGS" "TAGS"
+                                                      "SCHEDULED" "DEADLINE" "CLOSED")))
+                        (org-entry-properties nil 'standard)))
            (content-info (orgzly-data--entry-content))
            (events (orgzly-data--entry-events title (car content-info))))
       `((book . ,book) (file . ,file) (pos . ,pos) (level . ,level)
@@ -440,6 +445,7 @@ Point must be at a heading start; leaves point unchanged."
         (tags . ,local-tags) (itags . ,itags)
         (scheduled . ,scheduled) (deadline . ,deadline)
         (closed . ,closed) (created . ,created)
+        (properties . ,properties)
         (events . ,events)
         (content . ,(nth 0 content-info))
         (content-lines . ,(nth 1 content-info))

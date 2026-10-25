@@ -108,7 +108,9 @@
     (let* ((id (alist-get 'id (car (orgzly-state-entries "gtd"))))
            (book-id (alist-get 'id (orgzly-state-book "gtd")))
            (before (copy-tree orgzly-state)))
-      (dolist (route (list '(:kind books) '(:kind book :book "gtd") '(:kind search) '(:kind agenda)
+      (dolist (route (list '(:kind books) '(:kind book :book "gtd") '(:kind searches)
+                           '(:kind query :name "Agenda" :query ".it.done ad.7")
+                           '(:kind query :query "i.todo")
                            '(:kind settings) '(:kind new-book) '(:kind save-search)
                            (list :kind 'note :id id) (list :kind 'book-edit :id book-id)
                            (list :kind 'new-note :book "gtd" :book-id book-id)))
@@ -126,65 +128,124 @@
   (orgzly-test-with-snapshot
     (let ((orgzly-state-outline "gtd"))
       (dolist (json (list (jetpacs-node->canonical-json (orgzly-ui-screen '(:kind book :book "gtd")))
-                          (jetpacs-node->canonical-json (orgzly-ui-document))))
+                          (jetpacs-node->canonical-json (orgzly-ui-screen '(:kind books)))))
         (should-not (string-match-p (regexp-quote orgzly-directory) json))
         (should-not (string-match-p "\"pos\":" json))))))
 
-(ert-deftest orgzly-current-outline-is-a-template-over-the-document ()
-  "SPEC 13.8.5: the outline screen carries one row template over `/rows';
-the document carries the visible page; a tap folds in place or opens."
+;; Not on a device in the batch run: the dialog builds against the
+;; reference phone's width and the default twelve-hour clock.
+(ert-deftest orgzly-current-timestamp-dialog-round-trips ()
+  "The timestamp dialog seeds from an Org timestamp, writes its checked
+parts back, and builds Revived's day, time, repeater and delay rows."
+  (let ((ts (orgzly--ts-seed "<2026-07-12 Sun 09:30-10:00 .+1w -2d>")))
+    (should (equal (plist-get ts :date) "2026-07-12"))
+    (should (equal (plist-get ts :time) "09:30"))
+    (should (equal (plist-get ts :end) "10:00"))
+    (should (plist-get ts :end-on))
+    (should (equal (orgzly--ts-string ts) "<2026-07-12 Sun 09:30-10:00 .+1w -2d>"))
+    (should (equal (orgzly--ts-string (plist-put (copy-sequence ts) :time-on nil))
+                   "<2026-07-12 Sun .+1w -2d>")))
+  ;; Unset parts keep Revived's unchecked defaults.
+  (let ((ts (orgzly--ts-seed "")))
+    (should (equal (plist-get ts :repeater) ".+1w"))
+    (should (equal (plist-get ts :delay) "-1d"))
+    (should-not (plist-get ts :time-on))
+    (should (string-match-p "\\`<[0-9-]\\{10\\} [A-Za-z]+>\\'" (orgzly--ts-string ts))))
+  (let* ((ts (append '(:scope "s" :field "scheduled") (orgzly--ts-seed "<2026-07-12 Sun>")))
+         (json (jetpacs-node->canonical-json
+                (orgzly-design-wrap-dialog (orgzly-ui-timestamp-dialog ts) nil))))
+    (dolist (text '("\"DAY\"" "\"Sun, Jul 12\"" "\"Tomorrow\"" "\"REPEATER\"" "\".+1w\""
+                    "\"date_button\"" "\"time_button\"" "\"checkbox\"" "\"Set\""))
+      (should (string-search text json)))
+    ;; The end time waits for the time.
+    (should (string-match-p "\"enabled\":false" json)))
+  ;; A phone window keeps the measured width; a tablet pane widens it.
+  (should (= (orgzly-design-dialog-width nil) 316.44))
+  (should (= (orgzly-design-dialog-width '(:width_dp 635 :height_dp 800)) 460.0)))
+
+(ert-deftest orgzly-current-inserted-timestamp-resets-the-field ()
+  "Set in an inserted-timestamp dialog appends the stamp to the captured
+text and asks the next push to replace the field's typed draft."
   (orgzly-test-with-snapshot
-    (let ((orgzly-state-outline "gtd"))
-      (let* ((screen (orgzly-ui-screen '(:kind book :book "gtd")))
-             (json (jetpacs-node->canonical-json screen))
-             (document (orgzly-ui-document))
-             (entries (orgzly-state-entries "gtd"))
-             (rows (plist-get document :rows)))
-        (should (string-match-p "\"template\"" json))
-        (should (string-match-p "\"children\":\"/rows\"" json))
-        (should (= (length rows) (min orgzly-state-page-size
-                                      (length (orgzly-state-visible entries)))))
-        (should (equal (gethash "title" (aref rows 0)) (alist-get 'title (car entries))))
-        (should (equal (gethash "id" (aref rows 0)) (alist-get 'id (car entries))))
-        ;; Expanded here, as a Companion without the feature receives it,
-        ;; every row's descriptors carry the item key and no template remains.
-        (let* ((expanded (jetpacs-data-materialize screen document :strip t))
-               (ejson (jetpacs-node->canonical-json expanded)))
-          (should-not (string-match-p "\"template\"" ejson))
-          (should (string-match-p (format "\"item\":\"%s\"" (gethash "id" (aref rows 0))) ejson)))
-        ;; A tap on a parent folds it: fewer rows in the document, the file untouched.
-        (let* ((parent (nth 1 entries))
-               (before (orgzly-state-revision (alist-get 'file parent))))
-          (should (eq 'accepted (orgzly--on-note-tap (list :item (alist-get 'id parent)) nil)))
-          (should (member (alist-get 'id parent) orgzly-state-folded))
-          (should (< (length (plist-get (orgzly-ui-document) :rows)) (length rows)))
-          (should (equal before (orgzly-state-revision (alist-get 'file parent)))))
-        ;; The fold is synced as a per-element patch: one icon set and one
-        ;; removal per hidden row, which turn the old rows into the new.
-        (let* ((parent (nth 1 entries))
-               (orgzly-state-folded nil)
-               (hidden (- (length (orgzly-state-visible entries))
-                          (let ((orgzly-state-folded (list (alist-get 'id parent))))
-                            (length (orgzly-state-visible entries)))))
-               (old (orgzly-ui-outline-rows "gtd"))
-               synced)
-          (cl-letf (((symbol-function 'orgzly--later) #'funcall)
-                    ((symbol-function 'jetpacs-shell-data-sync)
-                     (lambda (surface path new &rest _) (setq synced (list surface path new)))))
-            (should (eq 'accepted (orgzly--on-note-tap (list :item (alist-get 'id parent)) nil))))
-          (should (equal (seq-take synced 2) '("orgzly" "/rows")))
-          (let ((ops (jetpacs-data-array-ops "/rows" old (nth 2 synced))))
-            (should (> hidden 0))
-            (should (= (1+ hidden) (length ops)))
-            (should (= hidden (cl-count "remove" ops :key (lambda (op) (plist-get op :op))
-                                        :test #'equal)))
-            (should (cl-find "/rows/1/icon" ops :key (lambda (op) (plist-get op :path))
-                             :test #'equal))
-            (should (equal (jetpacs-node->canonical-json (list :rows (nth 2 synced)))
-                           (jetpacs-node->canonical-json
-                            (jetpacs-data-apply-ops (list :rows old) ops))))))
-        ;; An unknown item is stale, not an error.
-        (should (eq 'stale (orgzly--on-note-tap '(:item "oz-unknown") nil)))))))
+    (let ((orgzly-state-draft nil) (orgzly--reset-fields nil) pushed)
+      (cl-letf (((symbol-function 'orgzly--later) (lambda (fn) (funcall fn)))
+                ((symbol-function 'jetpacs-shell-push)
+                 (lambda (_owner &rest args) (setq pushed args))))
+        (setq orgzly-state-ts (append '(:scope "form" :field "title" :text "Call mom")
+                                      (orgzly--ts-seed "<2026-07-12 Sun>")))
+        (orgzly--ts-conclude "set"))
+      (should (equal (plist-get orgzly-state-draft :title) "Call mom <2026-07-12 Sun>"))
+      (should (equal (plist-get pushed :reset-input-ids)
+                     (list (jetpacs-wire-id "form" "oz-title"))))
+      (should-not orgzly-state-ts))))
+
+(ert-deftest orgzly-current-outline-rows-follow-revived ()
+  "The outline is Revived's item_head rows: guides by depth, a bullet, the
+title as rich spans, a fold button on foldable notes, and a back gesture
+to the notebooks under the drawer's menu button."
+  (orgzly-test-with-snapshot
+    (let* ((orgzly-state-outline "gtd")
+           (entries (orgzly-state-entries "gtd"))
+           (rows (orgzly-ui-outline-rows "gtd"))
+           (call (car entries)) (projects (nth 1 entries)) (ship (nth 2 entries))
+           (back (jetpacs-view-switch "books"))
+           (screen (orgzly-ui-screen '(:kind book :book "gtd") back))
+           (json (jetpacs-node->canonical-json screen)))
+      (should-not (string-match-p "\"template\"" json))
+      (should (= (length rows) (length (orgzly-state-visible entries))))
+      ;; State bold in the TODO color, priority bold, tags 14sp after the title.
+      (let ((spans (append (gethash "spans" (aref rows 0)) nil)))
+        (should (equal (plist-get (car spans) :text) "TODO"))
+        (should (equal (plist-get (car spans) :font_weight) "bold"))
+        (should (equal (plist-get (car spans) :color) (orgzly-design-color 'todo nil)))
+        (should (equal (plist-get (nth 1 spans) :text) "  #A"))
+        (should (equal (plist-get (car (last spans)) :text) "  family phone"))
+        (should (equal (plist-get (car (last spans)) :scale) 0.875)))
+      ;; A parent folds with the en dash, a leaf with content too, a done
+      ;; note fades, and depth draws guides.
+      (should (equal (gethash "fold" (aref rows 1)) "–"))
+      (should (equal (gethash "fold" (aref rows 0)) "–"))
+      (should (gethash "faded" (aref rows 2)))
+      (should (= 1 (gethash "depth" (aref rows 2))))
+      (should (equal (gethash "id" (aref rows 1)) (alist-get 'id projects)))
+      (should (equal (gethash "id" (aref rows 2)) (alist-get 'id ship)))
+      (should (string-match-p (format "\"id\":\"%s\"" (alist-get 'id call)) json))
+      ;; The hamburger stays: no arrow, the drawer present, back declared.
+      (let* ((scaffold (aref (plist-get screen :children) 0))
+             (leading (aref (plist-get (plist-get scaffold :top_bar) :children) 0)))
+        (should (equal (plist-get scaffold :t) "scaffold"))
+        (should (plist-get scaffold :drawer))
+        (should (equal (plist-get scaffold :on_back) back))
+        (should-not (equal (plist-get leading :icon) "arrow_back"))))))
+
+(ert-deftest orgzly-current-links-open-from-the-snapshot ()
+  "A link span names note, field and index; Emacs opens the snapshot's
+target, only for web and mail addresses."
+  (should (equal (orgzly-ui-link-segments "See [[https://a.example/x][docs]] or https://b.example.")
+                 '(("See " . nil) ("docs" . "https://a.example/x") (" or " . nil)
+                   ("https://b.example" . "https://b.example") ("." . nil))))
+  (should (equal (orgzly-ui-link-segments "[[file:notes.org]]")
+                 '(("file:notes.org" . "file:notes.org"))))
+  (orgzly-test-with-snapshot
+    (let* ((entry (car (orgzly-state-entries "gtd")))
+           (id (alist-get 'id entry))
+           opened)
+      (setf (alist-get 'content entry) "Read [[https://a.example/x][docs]] and [[file:x.org][x]]")
+      (let* ((spans (orgzly-ui-org-spans (alist-get 'content entry) id "content"))
+             (link (cl-find-if (lambda (s) (plist-get s :on_tap)) spans)))
+        (should (equal (plist-get link :text) "docs"))
+        (should (plist-get link :underline))
+        (should (equal (plist-get (plist-get link :on_tap) :args)
+                       (list :id id :field "content" :link 0)))
+        (should-not (string-match-p "a.example" (jetpacs-node->canonical-json
+                                                 (plist-get link :on_tap)))))
+      (cl-letf (((symbol-function 'browse-url) (lambda (url &rest _) (setq opened url))))
+        (should (eq 'accepted (orgzly--on-link-open (list :id id :field "content" :link 0) nil)))
+        (should (equal opened "https://a.example/x"))
+        (setq opened nil)
+        (should (eq 'rejected (orgzly--on-link-open (list :id id :field "content" :link 1) nil)))
+        (should (eq 'rejected (orgzly--on-link-open (list :id id :field "content" :link 7) nil)))
+        (should-not opened)))))
 
 (ert-deftest orgzly-current-book-create-and-preface ()
   (orgzly-test-with-snapshot

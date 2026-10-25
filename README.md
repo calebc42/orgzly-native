@@ -3,8 +3,10 @@
 Orgzly's notebook, outline, search, agenda and note-editing workflows as an
 optional Elisp applet for the current Jetpacs POC. Org files remain the database.
 Presentation uses Jetpacs Compose Foundation components and the declarative
-Styles API, with light and dark palettes based on
-[Orgzly Revived's Android resources](https://github.com/orgzly-revived/orgzly-android-revived).
+Styles API to reproduce [Orgzly Revived](https://github.com/orgzly-revived/orgzly-android-revived)
+1.23's Material 3 look: elevated notebook cards, bulleted outline rows with
+indent guides and fold buttons, the navigation drawer and the add FAB, measured
+against the installed app on a phone.
 
 The original Git history is preserved through `9a28575`. The old bundled core,
 generated single-file distribution and deployment scripts have been retired.
@@ -37,10 +39,16 @@ Orgzly declares `jetpacs.components` and `jetpacs.design` as required extensions
 The APK and tablet onboarding payload include it in the optional Apps inventory;
 installing Jetpacs leaves it inactive. Enable Orgzly from Apps after enabling
 Foundation support. No `jetpacs.material3` component package is required.
-The stock Companion still supplies the generic scaffold, insets and dialogs.
-Orgzly's plain toolbar, note rows, fields and controls render through Foundation.
+Orgzly is a standalone app: it authors its whole chrome, so Jetpacs' dock,
+global actions and drawer stay off its screens. The stock Companion still
+supplies the scaffold, its Material 3 small top bar, insets and dialogs; the
+drawer, toolbar contents, cards, rows, FAB and fields render through Foundation.
+The way back to Jetpacs is the toolbar's overflow menu (Jetpacs apps).
+Notebooks, a notebook's outline, Searches, Agenda and Settings are top-level
+destinations: they wear the drawer's menu button, and the back gesture still
+returns to the notebook list (EBP amendment #200).
 
-Use Refresh after editing files externally. Unsaved Emacs buffers are preserved
+Use Sync (pull to refresh, or the drawer) after editing files externally. Unsaved Emacs buffers are preserved
 and must be saved before refreshing or accepting a device edit. Edits use opaque
 revision IDs and are refused when the notebook changes. Forms capture their
 fields together and save once before returning `accepted`.
@@ -51,8 +59,14 @@ boolean expressions and sort orders. `ad.N` produces agenda sections, bounded to
 occurrences. The supported envelope is 64 local notebooks, 1 MiB each, with
 2,000 total headings. Symlink notebook aliases and path traversal are refused.
 
-Appearance starts with Orgzly Light or Dark. A Design Lab profile derived from
-Orgzly can override it; unrelated global profiles do not remove required styles.
+Appearance starts with Orgzly Dark, toggled from the overflow menu. The dark
+palette is Revived's dynamic dark scheme as drawn on the reference phone, fixed
+in `orgzly-design.el`; it does not follow the wallpaper, and the light palette
+is a dynamic light scheme of the same seed that has not been measured against
+Revived. Text styles carry TextView line metrics (single-line height, line step
+and top padding in reference pixels), so wrapped notes land where Revived puts
+them. A Design Lab profile derived from Orgzly can override the presets;
+unrelated global profiles do not remove required styles.
 `M-x customize-group RET orgzly` configures the Org defaults. Unloading the
 feature calls `orgzly-unregister` and removes its registrations and pending timers.
 
