@@ -112,6 +112,14 @@ draft, and the toolbar's insert-timestamp button appends today's stamp to
 the edited title. Revived's light colors come from the tablet's wallpaper,
 so the light palette is the tablet's and the dark palette the phone's.
 
-Gates: Orgzly ERT 89 passed (two new: the dialog's round trip and the
-inserted timestamp's field reset) with Checkdoc and warning-free
-compilation.
+The Tags dropdown was matched the same way: it spans the field, ends at
+the "..." button, opens 7.5dp over the field's bottom with Revived's 16dp
+popup shadow, and lists ARCHIVE, tag1, tag2, tag3 in Revived's order; every
+edge and row within 2 px. Picking tag1 then tag2 gave `tag1 tag2 `, the
+clear button appeared after the first pick and the dropdown narrowed to
+end at the moved "..." button, as Revived's does.
+
+Gates: Orgzly ERT 90 passed (new: the dialog's round trip, the inserted
+timestamp's field reset, and the tags dropdown) with Checkdoc and
+warning-free compilation; Companion `testDebugUnitTest`,
+`testAndroidHostTest` and `jvmTest`; the full jetpacs-poc runner.

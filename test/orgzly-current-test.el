@@ -179,6 +179,38 @@ text and asks the next push to replace the field's typed draft."
                      (list (jetpacs-wire-id "form" "oz-title"))))
       (should-not orgzly-state-ts))))
 
+(ert-deftest orgzly-current-tags-pick-from-the-known-tags ()
+  "The Tags \"...\" lists every known tag in a dropdown before its button;
+a picked tag completes the word being typed or is appended, and replaces
+the field's typed draft."
+  (should (equal (orgzly--tags-insert "" "work") "work "))
+  (should (equal (orgzly--tags-insert "home" "work") "home work "))
+  (should (equal (orgzly--tags-insert "home wo" "work") "home work "))
+  (should (equal (orgzly--tags-insert "home WO" "work") "home work "))
+  (should (equal (orgzly--tags-insert "home " "work") "home work "))
+  (orgzly-test-with-snapshot
+    (let* ((tags (orgzly-ui-all-tags))
+           (entry (car (orgzly-state-entries "gtd")))
+           (screen (orgzly-ui-screen (list :kind 'note :id (alist-get 'id entry))))
+           (json (jetpacs-node->canonical-json screen))
+           (orgzly-state-draft nil) (orgzly--reset-fields nil) pushed)
+      (should tags)
+      (should (equal tags (sort (copy-sequence tags) #'string<)))
+      (should (equal tags (delete-dups (copy-sequence tags))))
+      (should (string-search "\"popup_before_anchor\"" json))
+      (dolist (tag tags) (should (string-search (format "\"label\":\"%s\"" tag) json)))
+      (cl-letf (((symbol-function 'orgzly--later) (lambda (fn) (funcall fn)))
+                ((symbol-function 'jetpacs-shell-push)
+                 (lambda (_owner &rest args) (setq pushed args))))
+        (should (eq (orgzly--on-note-tag (list :scope "form" :tag "no-such-tag") nil) 'rejected))
+        (should (eq (orgzly--on-note-tag
+                     (list :scope "form" :tag (car tags))
+                     (list :fields (list (intern (concat ":" (jetpacs-wire-id "form" "oz-tags")))
+                                         "x")))
+                    'accepted)))
+      (should (equal (plist-get orgzly-state-draft :tags) (concat "x " (car tags) " ")))
+      (should (equal (plist-get pushed :reset-input-ids) (list (jetpacs-wire-id "form" "oz-tags")))))))
+
 (ert-deftest orgzly-current-outline-rows-follow-revived ()
   "The outline is Revived's item_head rows: guides by depth, a bullet, the
 title as rich spans, a fold button on foldable notes, and a back gesture

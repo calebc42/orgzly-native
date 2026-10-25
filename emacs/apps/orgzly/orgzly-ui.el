@@ -802,6 +802,42 @@ A timestamp inserted into the field puts the new text in the draft."
     (or (plist-get draft (intern (concat ":" field)))
         (alist-get (intern field) entry))))
 
+(defun orgzly-ui-note-tags (entry)
+  "The Tags field's value for ENTRY: the draft's, else the note's own tags."
+  (let ((draft (and (equal (plist-get orgzly-state-draft :scope) orgzly-field-scope)
+                    orgzly-state-draft)))
+    (or (plist-get draft :tags) (string-join (alist-get 'tags entry) " "))))
+
+(defun orgzly-ui-all-tags ()
+  "Every tag set on a note of any notebook, sorted as Revived lists them."
+  (sort (delete-dups (cl-mapcan (lambda (e) (copy-sequence (alist-get 'tags e)))
+                                (orgzly-state-entries nil)))
+        #'string<))
+
+(defun orgzly-ui--tags-buttons (scope clear)
+  "The Tags row's buttons for form SCOPE: the dropdown, and Clear if CLEAR.
+Revived's \"...\" opens the autocomplete dropdown of every known tag under
+the field; a picked tag goes into the field as a typed one would."
+  (let* ((tags (orgzly-ui-all-tags))
+         (text (orgzly-design-color 'text (orgzly-ui-dark)))
+         (menu (if (null tags)
+                   (jetpacs-icon-button "more_horiz" (orgzly-ui-action "orgzly.note.tag")
+                                      :content-description "Tags" :color text :enabled :json-false)
+                 (orgzly-design-tags-scope
+                  (orgzly-ui-dark) (jetpacs-window) clear
+                  (jetpacs-menu
+                   (mapcar (lambda (tag)
+                             (jetpacs-menu-item
+                              tag (orgzly-ui-action "orgzly.note.tag" (list :scope scope :tag tag)
+                                                    nil '("oz-tags"))))
+                           tags)
+                   :icon "more_horiz")))))
+    (if (not clear) menu
+      (jetpacs-row menu
+                   (jetpacs-icon-button "close" (orgzly-ui-action "orgzly.note.clear"
+                                                                  (list :field "tags" :scope scope))
+                                        :content-description "Clear tags" :color text)))))
+
 (defun orgzly-ui--shown-time (raw)
   "RAW Org timestamp as Revived shows it, or the empty string."
   (if (string-empty-p raw) "" (orgzly-ui--time (list (cons 'raw raw)))))
@@ -1094,11 +1130,11 @@ toolbar's Done saves everything at once."
          (unless (memq 'metadata folds)
            (append
             (list
-             (orgzly-ui--meta-row
-              "label" (orgzly-ui--input 'value "oz-tags" (string-join (alist-get 'tags entry) " ") "Tags")
-              (orgzly-ui--meta-button "more_horiz" "Tags" (orgzly-ui-action "orgzly.note.pick"
-                                                                            (list :field "tags" :scope scope)))
-              "tags")
+             (let ((tags (orgzly-ui-note-tags entry)))
+               (orgzly-ui--meta-row
+                "label" (orgzly-ui--input 'value "oz-tags" tags "Tags")
+                (orgzly-ui--tags-buttons scope (not (string-blank-p tags)))
+                "tags"))
              (orgzly-ui--meta-row
               "flag_filled" (orgzly-ui--meta-value "state" (funcall value "state") "State" scope)
               (unless (string-empty-p (funcall value "state")) (funcall remove "state" "Clear state"))

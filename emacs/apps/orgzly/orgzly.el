@@ -116,6 +116,7 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
    (lambda ()
      (let ((entry (orgzly-state-resolve (plist-get args :id) t)))
        (unless (alist-get 'pos entry) (error "Expected a note"))
+       (setq orgzly-state-draft nil orgzly-state-editing nil)
        (orgzly--open (list :kind 'note :id (alist-get 'id entry)) t)))))
 
 (defun orgzly--on-note-new (args _params)
@@ -124,6 +125,8 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
    (lambda ()
      (let ((book (orgzly-state-resolve (plist-get args :id) t)))
        (unless (alist-get 'name book) (error "Expected a notebook"))
+       ;; A new note starts empty, as Revived's does.
+       (setq orgzly-state-draft nil orgzly-state-editing nil)
        (orgzly--open (list :kind 'new-note :book (alist-get 'name book)
                            :book-id (alist-get 'id book)) t)))))
 
@@ -307,9 +310,36 @@ Fields in `orgzly--reset-fields' drop their typed drafts for the new value."
 (defun orgzly--on-note-clear (args _params)
   "Clear the picked value ARGS name in the open note's draft."
   (let ((field (plist-get args :field)) (scope (plist-get args :scope)))
-    (if (not (and (member field '("state" "priority" "scheduled" "deadline")) (stringp scope)))
+    (if (not (and (member field '("state" "priority" "scheduled" "deadline" "tags")) (stringp scope)))
         'rejected
+      ;; Tags are typed, so clearing them replaces the field's draft too.
+      (when (equal field "tags") (setq orgzly--reset-fields '("oz-tags")))
       (orgzly--draft-put scope field "")
+      'accepted)))
+
+(defun orgzly--tags-insert (text tag)
+  "TEXT with TAG put in as Revived's tag field does.
+A last word TAG begins with is the one being completed, so TAG replaces
+it; otherwise TAG is appended.  One space follows, ready for the next."
+  (let* ((text (or text ""))
+         (start (if (string-match "\\([^ ]*\\)\\'" text) (match-beginning 1) (length text)))
+         (word (substring text start)))
+    (concat (if (and (not (string-empty-p word))
+                     (string-prefix-p (downcase word) (downcase tag)))
+                (substring text 0 start)
+              (concat (string-trim-right text) (if (string-blank-p text) "" " ")))
+            tag " ")))
+
+(defun orgzly--on-note-tag (args params)
+  "Put ARGS' `:tag' into the Tags field of form `:scope', captured in PARAMS."
+  (let* ((scope (plist-get args :scope)) (tag (plist-get args :tag))
+         (orgzly-field-scope scope))
+    (if (not (and (stringp scope) (stringp tag) (member tag (orgzly-ui-all-tags)))) 'rejected
+      (setq orgzly--reset-fields '("oz-tags"))
+      (orgzly--draft-put scope "tags"
+                         (orgzly--tags-insert (or (orgzly--field-maybe params "oz-tags")
+                                                  (plist-get orgzly-state-draft :tags))
+                                              tag))
       'accepted)))
 
 (defun orgzly--pick-choices (field)
@@ -749,6 +779,7 @@ Only variables listed in variable `orgzly-ui-settings' can be named."
     (jetpacs-defaction "orgzly.note.section" #'orgzly--on-note-section :doc "Fold or unfold the note screen's metadata or content" :args '((:name section :type "enum" :required t)))
     (jetpacs-defaction "orgzly.note.edit" #'orgzly--on-note-edit :doc "Edit the open note's title or content in place" :args '((:name field :type "enum" :required t) (:name scope :type "string" :required t)))
     (jetpacs-defaction "orgzly.note.clear" #'orgzly--on-note-clear :doc "Clear a picked value of the open note" :args '((:name field :type "enum" :required t) (:name scope :type "string" :required t)))
+    (jetpacs-defaction "orgzly.note.tag" #'orgzly--on-note-tag :doc "Put a known tag into the open note's Tags field" :args '((:name scope :type "string" :required t) (:name tag :type "string" :required t)))
     (jetpacs-defaction "orgzly.ts.part" #'orgzly--on-ts-part :doc "Set a part of the open timestamp dialog: its day, times, cookies or checkboxes" :args '((:name part :type "enum" :required t)))
     (jetpacs-defaction "orgzly.note.timestamp" #'orgzly--on-note-timestamp :doc "Insert a picked timestamp into the open note's edited title or content" :args '((:name scope :type "string" :required t)))
     (jetpacs-defaction "orgzly.note.pick" #'orgzly--on-note-pick :doc "Pick the open note's state, priority or planning time" :args '((:name field :type "enum" :required t) (:name scope :type "string" :required t) (:name raw :type "string")))

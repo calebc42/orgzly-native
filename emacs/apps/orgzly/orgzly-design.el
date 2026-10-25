@@ -46,7 +46,7 @@
     (guide . "#DADBDF") (bullet . "#455362") (fab . "#A4CDF6") (on-fab . "#174567")
     (pill . "#D5E4F7") (on-pill . "#455362") (dim . "#B1B5BA")
     (todo . "#B71C1C") (done . "#1B5E20") (link . "#396286") (hint . "#ABADB3")
-    (dialog . "#E4E8F0") (header . "#4A5C92") (menu . "#EEEDF4") (dialog-hint . "#76777F")
+    (dialog . "#E4E8F0") (header . "#4A5C92") (menu . "#EBEEF5") (dialog-hint . "#76777F")
     (track-on . "#B4C5FF") (track-off . "#C6C6D0") (thumb-on . "#4A5C92") (thumb-off . "#ECECEC")
     (pill-off . "#CDD2DA") (on-pill-off . "#90959D"))
   "Revived light colors with no EBP role.")
@@ -441,6 +441,36 @@ without a report it is the reference phone's."
         (h (orgzly-design--member window ":height_dp")))
     (if (not (and (numberp w) (numberp h))) 316.44
       (- (* w (if (>= (min w h) 600) 0.8 0.95)) 48))))
+
+(defun orgzly-design-tags-scope (dark window clear child)
+  "CHILD, the tags menu, under the scope of Revived's tags dropdown.
+The popup spans the Tags field of WINDOW, a `jetpacs-window' plist: the
+field starts 64dp in and ends 52dp from the edge at the menu button, 48dp
+more with the CLEAR button.  It opens 7.5dp over the field's bottom on
+DARK's popup surface, with 48dp rows whose 16sp labels sit 8dp in."
+  (let* ((w (or (orgzly-design--member window ":width_dp") 384))
+         (width (- w 64.36 52 (if clear 48 0)))
+         (c (lambda (name) (orgzly-design-color name dark))))
+    (jetpacs-design-scope
+     nil
+     `(("orgzly.tags.menu"
+        . ,(jetpacs-design-style
+            (append (orgzly-design--pairs
+                     (list :background_color (funcall c 'menu) :border_width 0
+                           :border_color "#00000000" :corner_radius 4
+                           :padding_vertical 8 :min_width width :popup_offset_y 40.5
+                           :elevation 16))
+                    ;; From the 48dp button's top: 7.5dp over the field's bottom.
+                    `(("popup_overlap" . ,(jetpacs-design-boolean t))
+                      ("popup_before_anchor" . ,(jetpacs-design-boolean t))))))
+       ("orgzly.tags.item" . ,(orgzly-design--box :padding_horizontal 8 :min_height 48))
+       ("orgzly.tags.trigger" . ,(orgzly-design--box :content_color (funcall c 'text))))
+     (list child)
+     :component-styles
+     (list (jetpacs-design-component-style "menu.container" '("orgzly.tags.menu"))
+           (jetpacs-design-component-style "menu.item" '("orgzly.tags.item"))
+           (jetpacs-design-component-style "menu.item-label" '("orgzly.t.menu"))
+           (jetpacs-design-component-style "menu.trigger" '("orgzly.tags.trigger"))))))
 
 (defun orgzly-design-wrap-dialog (dialog dark)
   "Wrap DIALOG like `orgzly-design-wrap' with DARK, sized for the window."
