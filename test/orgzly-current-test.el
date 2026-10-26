@@ -537,7 +537,8 @@ must not capture them, and saving keeps what they held."
 ;;; Device colors (SPEC 20.1.3, amendment #205)
 
 (defconst orgzly-test-scheme
-  '(:primary "#b4c5ff" :on_primary "#1a2d60" :secondary "#c1c5dd"
+  (cl-loop for (key value) on
+           '(:primary "#b4c5ff" :on_primary "#1a2d60" :secondary "#c1c5dd"
     :on_secondary "#2b3042" :surface "#121318" :on_surface "#e3e2e9"
     :outline "#8e9099" :error "#ffb4ab" :on_error "#690005"
     :background "#121318" :on_background "#e3e2e9"
@@ -547,6 +548,9 @@ must not capture them, and saving keeps what they held."
     :surface_container_lowest "#0c0e12" :primary_container "#7a90c8"
     :on_primary_container "#000000" :secondary_container "#8a90a5"
     :on_secondary_container "#000000")
+           by #'cddr
+           ;; Keys uninterned, as ebp.el decodes a never-seen key (SPEC 23.5).
+           nconc (list (make-symbol (symbol-name key)) value))
   "The phone's dark scheme as a Material Companion reports it.")
 
 (ert-deftest orgzly-design-derives-the-palette-from-the-device ()
@@ -609,3 +613,15 @@ Android's alpha, or the fixed resource; no report keeps the measured palette."
       (should orgzly-state-theme-chosen)
       (orgzly--on-colors-changed nil nil)
       (should orgzly-state-dark))))
+
+(ert-deftest orgzly-design-presets-stay-measured-under-device-colors ()
+  "Re-registering with a device report builds the same immutable presets."
+  (let ((orgzly-design--palettes nil) (orgzly-design--profiles nil))
+    (cl-letf (((symbol-function 'jetpacs-colors)
+               (lambda () (list :polarity "dark" :light orgzly-test-scheme
+                                :dark orgzly-test-scheme))))
+      (should (equal (plist-get (cdr (assoc "surface"
+                                            (plist-get (orgzly-design-current-profile t) :tokens)))
+                                :value)
+                     "#121318"))
+      (orgzly-design-register))))
