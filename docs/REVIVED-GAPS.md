@@ -76,11 +76,14 @@ device's Material You scheme (EBP #205, `colors.changed` and the welcome's
 Revived's theme does — each color a Material role, a role at Android's
 alpha over the surface behind it, or a fixed resource (TODO, DONE, the
 switch thumbs) — with the measured palettes as the fallback. The preset
-follows the device's appearance until the theme is toggled. Open on the
-device: the derived colors against Revived on the phone and the tablet,
-and the one deliberate approximation — the phone draws `textColorPrimary`
-two tones brighter than `on_surface` in dark, which the derivation
-reproduces as on_surface 85% toward white.
+follows the device's appearance until the theme is toggled. Checked on
+the Pixel Tablet in both polarities (`cmd uimode night yes` flips the
+device, the Companion reports, Orgzly Native re-authors): the Notebooks
+screen's window, card, FAB, title and body colors are Revived's exact
+pixels in light and dark. Open: the same check on the phone, where the
+measured dark palette's `strong` (#FCFAFF) is brighter than `on_surface`
+— Samsung's own `textColorPrimary`, which the derivation does not
+reproduce (it takes `on_surface`, as the tablet draws).
 
 - **Light palette on the phone** and **dark palette on the tablet** were
   never measured; with the device scheme both now derive from the same

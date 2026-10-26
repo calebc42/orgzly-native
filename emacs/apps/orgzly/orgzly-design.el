@@ -98,9 +98,10 @@ resource, or a role at the alpha Android composites it at."
          (accent (upcase (jetpacs-plist-get-named scheme (if dark "secondary" "primary"))))
          (pill-off (orgzly-design-blend on-surface 0.12 dialog)))
     `((container . ,(funcall role "surface_container_low" 'container))
-      ;; textColorPrimary: on_surface in light; the phone draws it two
-      ;; tones brighter than on_surface in dark (N98 against N90).
-      (strong . ,(if dark (orgzly-design-blend "#FFFFFF" 0.85 on-surface) on-surface))
+      ;; textColorPrimary: on_surface (the Pixel Tablet draws exactly
+      ;; that in both polarities; the measured phone palette's brighter
+      ;; dark value is Samsung's own text color, kept as the fallback).
+      (strong . ,on-surface)
       (text . ,text)
       ;; listDivider: 12% of the foreground over the surface.
       (guide . ,(orgzly-design-blend (if dark "#FFFFFF" "#000000") 0.12 surface))
