@@ -462,3 +462,17 @@ Inbox preface text.
 
 (provide 'orgzly-data-test)
 ;;; orgzly-data-test.el ends here
+
+(ert-deftest orgzly-data-set-content-on-an-empty-body-keeps-the-next-heading ()
+  "Replacing the empty body of a note followed directly by another heading
+must not delete that heading."
+  (orgzly-data-test--with-books
+   (let* ((ref (orgzly-data-test--entry "Projects"))
+          (before (with-current-buffer (orgzly-data--book-buffer "gtd")
+                    (org-map-entries (lambda () (org-get-heading t t t t))))))
+     (orgzly-data-set-content ref "")
+     (should (equal (with-current-buffer (orgzly-data--book-buffer "gtd")
+                      (org-map-entries (lambda () (org-get-heading t t t t))))
+                    before))
+     (orgzly-data-set-content ref "Now a body")
+     (should (equal (alist-get 'content (orgzly-data-test--entry "Projects")) "Now a body")))))

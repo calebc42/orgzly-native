@@ -148,6 +148,92 @@ the note modified, and its prompt returns on every Back."
        (orgzly--open (list :kind 'new-note :book (alist-get 'name book)
                            :book-id (alist-get 'id book) :parent-id (alist-get 'id entry)) t)))))
 
+;;; Revived's note popup: the buttons a fling on a row offers
+
+(defun orgzly--row-commit (fn)
+  "Run FN on the notebook of the row's note and show the change in place.
+Unlike a note form's Done, a popup button keeps the screen the fling was
+on — an outline, a search, the agenda — so the refreshed snapshot is
+pushed where it is."
+  (funcall fn)
+  (condition-case err
+      (progn (orgzly-refresh) (orgzly--later (lambda () (jetpacs-shell-push "orgzly"))))
+    (error (message "Orgzly saved; refresh needed: %s" (error-message-string err))))
+  'accepted)
+
+(defun orgzly--on-note-place (args _params)
+  "Open a new-note form placed against ARGS' note: above, under or below it."
+  (orgzly--guard
+   (lambda ()
+     (let* ((entry (orgzly-state-resolve (plist-get args :id) t))
+            (book (orgzly-state-book (alist-get 'book entry)))
+            (place (plist-get args :place)))
+       (unless (alist-get 'pos entry) (error "Expected a note"))
+       (unless (member place '("above" "under" "below")) (error "Unknown placement"))
+       (setq orgzly-state-draft nil orgzly-state-editing nil)
+       (orgzly--open (append (list :kind 'new-note :book (alist-get 'name book)
+                                   :book-id (alist-get 'id book))
+                             (if (equal place "under")
+                                 (list :parent-id (alist-get 'id entry))
+                               (list :sibling-id (alist-get 'id entry)
+                                     :before (equal place "above"))))
+                     t)
+       'accepted))))
+
+(defun orgzly--on-note-plan (args _params)
+  "Open the timestamp dialog for ARGS' note `:field', scheduled or deadline.
+Set writes the note's planning line at once; the row has no draft."
+  (let ((field (plist-get args :field)))
+    (if (not (member field '("scheduled" "deadline"))) 'rejected
+      (orgzly--guard
+       (lambda ()
+         (let ((entry (orgzly-state-resolve (plist-get args :id) t)))
+           (unless (alist-get 'pos entry) (error "Expected a note"))
+           (orgzly--ts-open nil (concat "row-" field)
+                            (or (alist-get 'raw (alist-get (intern field) entry)) ""))
+           (setq orgzly-state-ts (plist-put orgzly-state-ts :id (alist-get 'id entry)))
+           'accepted))))))
+
+(defun orgzly--row-plan (id kind stamp)
+  "Set note ID's planning KIND to STAMP, or clear it when STAMP is nil."
+  (orgzly--guard
+   (lambda ()
+     (let* ((entry (orgzly-state-resolve id t))
+            (book (alist-get 'book entry)))
+       (unless book (error "Expected a note"))
+       (orgzly--row-commit
+        (lambda ()
+          (with-current-buffer (orgzly-data--book-buffer book)
+            (atomic-change-group
+              (let ((orgzly-data--transaction t))
+                (orgzly-data-set-planning entry kind (and stamp (orgzly--planning stamp))))
+              (save-buffer)))))))))
+
+(defun orgzly--on-note-state (args _params)
+  "Offer the TODO keywords for ARGS' note; the pick is written at once."
+  (orgzly--guard
+   (lambda ()
+     (let* ((entry (orgzly-state-resolve (plist-get args :id) t))
+            (id (alist-get 'id entry)))
+       (unless (alist-get 'pos entry) (error "Expected a note"))
+       (orgzly--choices
+        "state" "State"
+        (append (mapcar (lambda (kw) (cons kw kw)) (orgzly--pick-choices "state"))
+                '(("None" . "__none__")))
+        (lambda (value)
+          (orgzly--guard
+           (lambda ()
+             (let* ((entry (orgzly-state-resolve id t)) (book (alist-get 'book entry)))
+               (unless book (error "Expected a note"))
+               (orgzly--row-commit
+                (lambda ()
+                  (with-current-buffer (orgzly-data--book-buffer book)
+                    (atomic-change-group
+                      (let ((orgzly-data--transaction t))
+                        (orgzly-data-set-state entry (unless (equal value "__none__") value)))
+                      (save-buffer))))))))))
+       'accepted))))
+
 (defun orgzly--present-outline ()
   "Re-push the outline after a fold change."
   (orgzly--later (lambda () (jetpacs-shell-push "orgzly"))))
@@ -225,11 +311,14 @@ Anything folded unfolds everything; otherwise every foldable note folds."
             (orgzly-field-scope (orgzly-field-scope
                                  (list :kind (if id 'note 'new-note) :id id
                                        :book-id (plist-get args :book-id)
-                                       :parent-id (plist-get args :parent-id))))
+                                       :parent-id (plist-get args :parent-id)
+                                       :sibling-id (plist-get args :sibling-id)
+                                       :before (plist-get args :before))))
             (entry (and id (orgzly-state-resolve id t)))
             (book (if entry (orgzly-state-book (alist-get 'book entry))
                     (orgzly-state-resolve (plist-get args :book-id) t)))
             (parent (when (plist-get args :parent-id) (orgzly-state-resolve (plist-get args :parent-id) t)))
+            (sibling (when (plist-get args :sibling-id) (orgzly-state-resolve (plist-get args :sibling-id) t)))
             (title (or (orgzly--field-maybe params "oz-title") (orgzly-ui-note-text "title" entry) ""))
             (state (orgzly--note-input params "state" entry))
             (priority (orgzly--note-input params "priority" entry))
@@ -250,6 +339,7 @@ Anything folded unfolds everything; otherwise every foldable note folds."
                     (not (string-match-p "[\n\r]" title))
                     (or (string-empty-p priority) (string-match-p "\\`[A-C]\\'" priority))
                     (or (null parent) (equal name (alist-get 'book parent)))
+                    (or (null sibling) (equal name (alist-get 'book sibling)))
                     (or (string-empty-p prop-name)
                         (string-match-p "\\`[^[:space:]:]+\\'" prop-name)))
          (error "Invalid note fields"))
@@ -259,7 +349,8 @@ Anything folded unfolds everything; otherwise every foldable note folds."
          (atomic-change-group
            (let ((orgzly-data--transaction t))
              (unless entry
-               (setq entry (orgzly-data-new-note name title :under parent)))
+               (setq entry (orgzly-data-new-note name title :under parent :sibling sibling
+                                                 :before (and sibling (eq (plist-get args :before) t)))))
              (orgzly-data-set-content entry content)
              (orgzly-data-set-tags entry (split-string tags "[ :]+" t))
              (orgzly-data-set-priority entry (unless (string-empty-p priority) priority))
@@ -281,7 +372,9 @@ modified once anything is filled in."
          (orgzly-field-scope (orgzly-field-scope
                               (list :kind (if id 'note 'new-note) :id id
                                     :book-id (plist-get args :book-id)
-                                    :parent-id (plist-get args :parent-id))))
+                                    :parent-id (plist-get args :parent-id)
+                                    :sibling-id (plist-get args :sibling-id)
+                                    :before (plist-get args :before))))
          (entry (and id (orgzly-state-resolve id t)))
          (text (lambda (field)
                  (or (orgzly--field-maybe params (concat "oz-" field))
@@ -546,6 +639,10 @@ A pick re-shows it, so the request it replaces concludes unanswered."
     (pcase field
       ((or "scheduled" "deadline")
        (orgzly--draft-put scope field (if (equal value "set") stamp "")))
+      ;; A row's popup button: the planning line is written at once.
+      ((or "row-scheduled" "row-deadline")
+       (orgzly--row-plan (plist-get ts :id) (intern (substring field 4))
+                         (and (equal value "set") stamp)))
       ((or "title" "content")
        (when (equal value "set")
          (if (and (equal field "content") (orgzly--content-editor scope))
@@ -1151,6 +1248,9 @@ Revived opens Android's document picker; this lists the Org files of
     (jetpacs-defaction "orgzly.note.open" #'orgzly--on-note-open :doc "Open the note represented by an opaque revision id" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.new" #'orgzly--on-note-new :doc "Open a new-note form in the current notebook" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.child" #'orgzly--on-note-child :doc "Open a child-note form under the current note" :args '((:name id :type "ref" :required t)))
+    (jetpacs-defaction "orgzly.note.place" #'orgzly--on-note-place :doc "Open a new-note form above, under or below the current note" :args '((:name id :type "ref" :required t) (:name place :type "enum" :required t)))
+    (jetpacs-defaction "orgzly.note.plan" #'orgzly--on-note-plan :doc "Pick the current note's scheduled or deadline time from its row" :args '((:name id :type "ref" :required t) (:name field :type "enum" :required t)))
+    (jetpacs-defaction "orgzly.note.state" #'orgzly--on-note-state :doc "Pick the current note's TODO state from its row" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.fold" #'orgzly--on-fold :doc "Toggle the current outline note's descendants and content" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.section" #'orgzly--on-note-section :doc "Fold or unfold the note screen's metadata or content" :args '((:name section :type "enum" :required t)))
     (jetpacs-defaction "orgzly.note.metadata" #'orgzly--on-note-metadata :doc "Show all or selected metadata rows, or toggle always showing set ones" :args '((:name show :type "enum") (:name always-set :type "boolean")))

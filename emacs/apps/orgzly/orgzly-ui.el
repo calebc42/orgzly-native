@@ -16,8 +16,10 @@
 (defun orgzly-field-scope (route)
   "Return the stable form namespace for ROUTE and its revision-bound identity."
   (jetpacs-wire-id (symbol-name (plist-get route :kind))
-                   (or (plist-get route :id) (plist-get route :parent-id)
-                       (plist-get route :book-id) "form")))
+                   (concat (or (plist-get route :id) (plist-get route :parent-id)
+                               (plist-get route :sibling-id)
+                               (plist-get route :book-id) "form")
+                           (if (plist-get route :before) "-above" ""))))
 
 (defun orgzly-field-id (id)
   "Qualify logical field ID with the current form's identity namespace."
@@ -240,6 +242,40 @@ archived note fades these at 45%, never its bullet (setupAlpha)."
                                            (jetpacs-rich-text
                                             (append (gethash "content-spans" item) nil))))))))))
 
+(defun orgzly-ui--swipe-side (actions)
+  "A popup swipe side of ACTIONS, (LABEL ICON NAME ARGS [CONFIRM]) lists.
+Revived's NotePopup: a fling on a note opens its buttons beside the
+finger (SPEC 17.3 `presentation: popup', amendment #207)."
+  (jetpacs-swipe
+   (mapcar (lambda (a)
+             (jetpacs-swipe-action (nth 0 a) :icon (nth 1 a)
+                                   :on-trigger (orgzly-ui-action (nth 2 a) (nth 3 a) (nth 4 a))))
+           actions)
+   :presentation "popup"))
+
+(defun orgzly-ui-note-swipes (id &optional query)
+  "The popup swipe sides of note ID's row, as a plist for the pressable.
+A fling to the right (the start side) offers Revived's default
+schedule, deadline, state and done buttons; to the left, in a notebook,
+delete and the three new-note placements.  QUERY rows (search, agenda)
+keep only the right side: Revived's one left button opens the note's
+notebook, which the row's tap already does."
+  (append
+   (list :swipe-start
+         (orgzly-ui--swipe-side
+          `(("Schedule" "today" "orgzly.note.plan" (:id ,id :field "scheduled"))
+            ("Deadline" "alarm" "orgzly.note.plan" (:id ,id :field "deadline"))
+            ("State" "flag" "orgzly.note.state" (:id ,id))
+            ("Done" "check_circle_outline" "orgzly.note.operate" (:id ,id :operation "toggle")))))
+   (unless query
+     (list :swipe-end
+           (orgzly-ui--swipe-side
+            `(("Delete" "delete" "orgzly.note.operate" (:id ,id :operation "delete")
+               "Delete this note?")
+              ("New above" "add_above" "orgzly.note.place" (:id ,id :place "above"))
+              ("New under" "add_under" "orgzly.note.place" (:id ,id :place "under"))
+              ("New below" "add_below" "orgzly.note.place" (:id ,id :place "below"))))))))
+
 (defun orgzly-ui-outline-node (item)
   "Build outline ITEM as Revived's item_head.xml: guides, bullet, title, fold.
 ITEM is the hash `orgzly-ui-outline-row' or `orgzly-ui-preface-row'
@@ -259,15 +295,16 @@ let a template bind."
         (cl-loop repeat (gethash "depth" item) collect (orgzly-ui--guide))
         (list
          (jetpacs-with-attrs
-          (jetpacs-design-pressable
-           (append (gethash "styles" item) nil)
-           (orgzly-ui-action "orgzly.note.open" (list :id (gethash "id" item)))
-           (list
-            (jetpacs-row
-             (orgzly-ui--bullet (gethash "ring" item))
-             (jetpacs-spacer :width 8)
-             (jetpacs-with-attrs (orgzly-ui--row-column item) :weight 1)
-             :align "top")))
+          (apply #'jetpacs-design-pressable
+                 (append (gethash "styles" item) nil)
+                 (orgzly-ui-action "orgzly.note.open" (list :id (gethash "id" item)))
+                 (list
+                  (jetpacs-row
+                   (orgzly-ui--bullet (gethash "ring" item))
+                   (jetpacs-spacer :width 8)
+                   (jetpacs-with-attrs (orgzly-ui--row-column item) :weight 1)
+                   :align "top"))
+                 (orgzly-ui-note-swipes (gethash "id" item)))
           :weight 1)
          (let ((width (orgzly-design-fold-width (jetpacs-window))))
            (if (string-empty-p (gethash "fold" item))
@@ -333,10 +370,11 @@ outline row's."
     (jetpacs-with-attrs
      (orgzly-ui-styled
       "orgzly.result.box"
-      (jetpacs-design-pressable
-       (append (gethash "styles" item) nil)
-       (orgzly-ui-action "orgzly.note.open" (list :id (alist-get 'id entry)))
-       (list (orgzly-ui--row-column item show-book))))
+      (apply #'jetpacs-design-pressable
+             (append (gethash "styles" item) nil)
+             (orgzly-ui-action "orgzly.note.open" (list :id (alist-get 'id entry)))
+             (list (orgzly-ui--row-column item show-book))
+             (orgzly-ui-note-swipes (alist-get 'id entry) t)))
      :key (alist-get 'id entry))))
 
 (defun orgzly-ui-page-window (count)
@@ -544,10 +582,11 @@ search results default.  KEY overrides the row's identity."
     (jetpacs-with-attrs
      (orgzly-ui-styled
       "orgzly.result.box"
-      (jetpacs-design-pressable
-       '("orgzly.head")
-       (orgzly-ui-action "orgzly.note.open" (list :id (alist-get 'id entry)))
-       (list (orgzly-ui--row-column item t))))
+      (apply #'jetpacs-design-pressable
+             '("orgzly.head")
+             (orgzly-ui-action "orgzly.note.open" (list :id (alist-get 'id entry)))
+             (list (orgzly-ui--row-column item t))
+             (orgzly-ui-note-swipes (alist-get 'id entry) t)))
      :key (or key (alist-get 'id entry)))))
 
 (defun orgzly-ui-searches ()
@@ -1427,9 +1466,14 @@ Revived's Metadata submenu: everything, or the selected rows plus, while
                                                         "Delete this notebook and every note in it?") :variant "text")))))))
 
 (defun orgzly-ui--note-args (route)
-  "The save and operation arguments of note ROUTE."
+  "The save and operation arguments of note ROUTE.
+A new note names its notebook and the note it is placed against: a
+parent, or a sibling it goes below or, with `:before', above."
   (if (plist-get route :id) (list :id (plist-get route :id))
-    (list :book-id (plist-get route :book-id) :parent-id (plist-get route :parent-id))))
+    (append (list :book-id (plist-get route :book-id) :parent-id (plist-get route :parent-id))
+            (when (plist-get route :sibling-id)
+              (list :sibling-id (plist-get route :sibling-id)
+                    :before (and (plist-get route :before) t))))))
 
 (defun orgzly-ui--overflow-items (route)
   "Revived's overflow items for ROUTE's screen, then Orgzly Native's own.

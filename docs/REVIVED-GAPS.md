@@ -33,6 +33,22 @@ Closed later on 2026-10-25:
 - The period dialogs' hint follows the type wheel as it turns
   (`jetpacs.state_switch`), with no round trip.
 
+Closed later on 2026-10-26: **the note popup.** A fling on a note row
+opens Revived's popup — a floating row of tonal icon buttons beside the
+finger — through EBP #207 popup swipe sides (`presentation: popup` on a
+`jetpacs.pressable`, which now carries swipe sides). Right: Schedule,
+Deadline, State, Done (the Revived defaults); left in a notebook: Delete,
+New above, New under, New below (Revived's fifth default, Refile, has no
+Orgzly Native counterpart yet). Schedule and Deadline open the timestamp
+dialog and write the planning line at once; State offers the keywords;
+New above/below place the note against the row's sibling. Search and
+agenda rows carry only the right side: Revived's single left button
+(Focus) opens the note's notebook, and with one button Revived performs it
+without a popup, which EBP's popup does not model. Open: the popup's
+chrome is drawn from Material's 40dp tonal icon button, not measured
+against Revived's; the four-action limit per side; the row's `on_long_tap`
+(Revived's multi-select) remains missing.
+
 Closed later on 2026-10-26: **the content is an `editor` node** (SPEC 19,
 `editor.sync`): the Companion opens a session on the form's own document
 (`orgzly:content:<scope>`), every delta feeds the draft through the

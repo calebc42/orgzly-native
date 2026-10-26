@@ -754,3 +754,84 @@ does not leave the user in a note whose prompt returns on every Back."
       (should (equal toasts '("Orgzly: Invalid note fields")))
       (should (eq 'stale (orgzly--guard (lambda () (signal 'orgzly-stale nil)))))
       (should (= (length toasts) 2)))))
+
+;;; Revived's note popup (SPEC 17.3 popup swipe sides, amendment #207)
+
+(ert-deftest orgzly-current-rows-fling-open-revived-popups ()
+  "Every outline row carries two popup swipe sides with Revived's default
+buttons; a search row keeps only the right one."
+  (orgzly-test-with-snapshot
+    (let* ((json (jetpacs-node->canonical-json (orgzly-ui-screen '(:kind book :book "gtd"))))
+           (entry (car (orgzly-state-entries "gtd")))
+           (swipes (orgzly-ui-note-swipes (alist-get 'id entry)))
+           (start (plist-get swipes :swipe-start))
+           (end (plist-get swipes :swipe-end)))
+      (should (string-search "\"presentation\":\"popup\"" json))
+      (should (equal (mapcar (lambda (a) (plist-get a :label)) (append (plist-get start :actions) nil))
+                     '("Schedule" "Deadline" "State" "Done")))
+      (should (equal (mapcar (lambda (a) (plist-get a :icon)) (append (plist-get end :actions) nil))
+                     '("delete" "add_above" "add_under" "add_below")))
+      (should (equal (plist-get (plist-get (aref (plist-get end :actions) 0) :on_trigger) :confirm)
+                     "Delete this note?"))
+      (should-not (plist-member (orgzly-ui-note-swipes (alist-get 'id entry) t) :swipe-end))
+      (should (string-search "\"presentation\":\"popup\""
+                             (jetpacs-node->canonical-json
+                              (orgzly-ui-screen '(:kind query :query "i.todo"))))))))
+
+(ert-deftest orgzly-current-popup-places-a-new-note-against-a-row ()
+  "New above and below open a new-note form against the sibling, and Done
+creates the note there; new under goes beneath it as a child."
+  (orgzly-test-with-snapshot
+    (let* ((entries (orgzly-state-entries "gtd"))
+           (second (nth 1 entries)) (id (alist-get 'id second)) opened)
+      (cl-letf (((symbol-function 'orgzly--open) (lambda (route &rest _) (setq opened route))))
+        (should (eq (orgzly--on-note-place (list :id id :place "above") nil) 'accepted))
+        (should (equal (plist-get opened :sibling-id) id))
+        (should (plist-get opened :before))
+        (should (eq (orgzly--on-note-place (list :id id :place "under") nil) 'accepted))
+        (should (equal (plist-get opened :parent-id) id))
+        (should (eq (orgzly--on-note-place (list :id id :place "sideways") nil) 'rejected)))
+      (let* ((route (list :kind 'new-note :book "gtd" :book-id (alist-get 'id (orgzly-state-book "gtd"))
+                          :sibling-id id :before t))
+             (args (orgzly-ui--note-args route))
+             (orgzly-field-scope (orgzly-field-scope route))
+             (fields (list :fields (cl-loop for (key value) on (list :oz-title "Placed above" :oz-tags ""
+                                                                     :oz-priority "" :oz-state ""
+                                                                     :oz-scheduled "" :oz-deadline "")
+                                            by #'cddr
+                                            append (list (intern (concat ":" (orgzly-field-id (substring (symbol-name key) 1))))
+                                                         value)))))
+        (should (equal (plist-get args :sibling-id) id))
+        (should (eq (orgzly--on-note-save args fields) 'accepted))
+        (let ((titles (mapcar (lambda (e) (alist-get 'title e)) (orgzly-state-entries "gtd"))))
+          (should (member (alist-get 'title second) titles))
+          (should (= (cl-position "Placed above" titles :test #'equal)
+                     (1- (cl-position (alist-get 'title second) titles :test #'equal)))))))))
+
+(ert-deftest orgzly-current-popup-writes-planning-and-state-at-once ()
+  "Set in a row's timestamp dialog writes the planning line; a picked state
+is written without a form; both refresh in place."
+  (orgzly-test-with-snapshot
+    (let* ((entry (car (orgzly-state-entries "gtd"))) (id (alist-get 'id entry))
+           (title (alist-get 'title entry)) pushed)
+      (cl-letf (((symbol-function 'jetpacs-shell-push) (lambda (&rest _) (setq pushed t)))
+                ((symbol-function 'orgzly--later) (lambda (fn) (funcall fn)))
+                ((symbol-function 'orgzly--ts-show) #'ignore))
+        (should (eq (orgzly--on-note-plan (list :id id :field "deadline") nil) 'accepted))
+        (should (equal (plist-get orgzly-state-ts :field) "row-deadline"))
+        (should (equal (plist-get orgzly-state-ts :id) id))
+        (setq orgzly-state-ts (plist-put orgzly-state-ts :date "2026-08-01"))
+        (orgzly--ts-conclude "set")
+        (let ((saved (cl-find title (orgzly-state-entries "gtd") :key (lambda (e) (alist-get 'title e)) :test #'equal)))
+          (should (string-prefix-p "<2026-08-01" (alist-get 'raw (alist-get 'deadline saved))))
+          (should pushed)
+          (setq pushed nil)
+          (let (on-pick)
+            (cl-letf (((symbol-function 'orgzly--choices)
+                       (lambda (_id _title choices pick) (should (assoc "None" choices)) (setq on-pick pick))))
+              (should (eq (orgzly--on-note-state (list :id (alist-get 'id saved)) nil) 'accepted)))
+            (funcall on-pick "DONE")
+            (should (equal (alist-get 'state (cl-find title (orgzly-state-entries "gtd")
+                                                      :key (lambda (e) (alist-get 'title e)) :test #'equal))
+                           "DONE"))
+            (should pushed)))))))

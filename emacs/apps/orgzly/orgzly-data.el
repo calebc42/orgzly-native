@@ -709,8 +709,11 @@ them) — so the stamp they insert is rewritten whole from PARTS."
                                (save-excursion (outline-next-heading) (point)) t)
             (forward-line 1)
           (forward-line 1))))
-    (let ((beg (point))
-          (end (progn (outline-next-heading) (point))))
+    ;; An empty body puts point ON the next heading already; asking for
+    ;; the next heading from there would skip it and delete it.
+    (let* ((beg (point))
+           (end (if (looking-at-p org-outline-regexp-bol) beg
+                  (progn (outline-next-heading) (point)))))
       (delete-region beg end)
       (goto-char beg)
       (let ((text (string-trim-right (or content ""))))
