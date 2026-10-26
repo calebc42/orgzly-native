@@ -7,6 +7,7 @@
 (require 'orgzly-state)
 (require 'orgzly-design)
 (require 'jetpacs-chrome)
+(require 'jetpacs-org-links)       ; the system-link rule every applet shares
 
 (defvar orgzly-field-scope nil
   "Dynamic identity namespace of the current form, shared by its capture handler.")
@@ -87,7 +88,7 @@ neither starts nor ends with a space, as Org's own emphasis rule does."
     (nreverse spans)))
 
 (defconst orgzly-ui--system-schemes
-  "https?\\|mailto\\|tel\\|voicemail\\|geo\\|sms\\|smsto\\|mms\\|mmsto"
+  (mapconcat #'regexp-quote jetpacs-org-link-system-types "\\|")
   "Revived's SYSTEM_LINK_SCHEMES: links the device's own apps open.")
 
 (defconst orgzly-ui--link-re
@@ -98,8 +99,7 @@ a known scheme and everything up to the next whitespace.")
 
 (defun orgzly-ui-system-link-p (target)
   "Non-nil when TARGET is a link the device's own apps open, as in Revived."
-  (and (stringp target)
-       (string-match-p (concat "\\`\\(?:" orgzly-ui--system-schemes "\\):.+") target)))
+  (jetpacs-org-link-system-p target))
 
 (defun orgzly-ui-link-segments (text)
   "Split Org TEXT into (STRING . TARGET) segments; TARGET is nil for prose.
@@ -137,13 +137,11 @@ snapshot holds."
                                :on-tap
                                ;; Revived hands system links to the device's
                                ;; own apps (EBP #208); the rest are Emacs's.
-                               (if (and (orgzly-ui-system-link-p target)
-                                        (jetpacs-uri-open-p target)
-                                        (jetpacs-builtin-advertised-p "uri.open"))
-                                   (jetpacs-uri-open target)
-                                 (orgzly-ui-action
-                                  "orgzly.link.open"
-                                  (list :id id :field field :link n))))))))
+                               (jetpacs-org-link-action
+                                target
+                                (orgzly-ui-action
+                                 "orgzly.link.open"
+                                 (list :id id :field field :link n))))))))
      (orgzly-ui-link-segments text))))
 
 (defun orgzly-ui-title-spans (entry)

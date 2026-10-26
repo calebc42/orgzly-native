@@ -462,12 +462,86 @@ Revived's long press on a fold button."
        (orgzly--present-outline)
        'accepted))))
 
+(defun orgzly--link-property-p (props name value)
+  "Non-nil when alist PROPS holds property NAME equal to VALUE."
+  (let ((cell (assoc-string name props t)))
+    (and cell (equal (string-trim (or (cdr cell) "")) value))))
+
+(defun orgzly--link-book-property-p (book name value)
+  "Non-nil when BOOK's preface declares property NAME as VALUE.
+A file-level property drawer is how Org gives a whole file an ID."
+  (let ((preface (alist-get 'preface book)))
+    (and (stringp preface)
+         (let ((case-fold-search t))
+           (string-match-p (concat "^[ \t]*:" (regexp-quote name) ":[ \t]+"
+                                   (regexp-quote value) "[ \t]*$")
+                           preface)))))
+
+(defun orgzly--link-find-property (name value &optional book)
+  "The route to the note, else the notebook, whose property NAME is VALUE.
+BOOK limits the search to one notebook.  Revived's
+NoteOrBookFindWithProperty: the first match wins."
+  (let ((entry (cl-find-if (lambda (e) (orgzly--link-property-p (alist-get 'properties e) name value))
+                           (orgzly-state-entries book)))
+        (found (and (null book)
+                    (cl-find-if (lambda (b) (orgzly--link-book-property-p b name value))
+                                (plist-get orgzly-state :books)))))
+    (cond (entry (list :kind 'note :id (alist-get 'id entry)))
+          (found (list :kind 'book :book (alist-get 'name found))))))
+
+(defun orgzly--link-find-search (search book)
+  "The route for Org link SEARCH (\"*Heading\" or \"#custom-id\") in BOOK."
+  (cond
+   ((string-prefix-p "#" search)
+    (orgzly--link-find-property "CUSTOM_ID" (substring search 1) book))
+   ((string-prefix-p "*" search)
+    (let* ((title (string-trim (substring search 1)))
+           (entry (cl-find-if (lambda (e) (equal (alist-get 'title e) title))
+                              (orgzly-state-entries book))))
+      (and entry (list :kind 'note :id (alist-get 'id entry)))))))
+
+(defun orgzly--link-find-file (path source)
+  "The route for a `file:' link PATH written in SOURCE, a snapshot entry.
+The path resolves against SOURCE's file as Org does; a notebook file opens
+that notebook (Revived's OpenBook), and a `::' search opens the note it
+names inside it.  Anything else is not a notebook and has no target."
+  (let* ((parts (split-string path "::"))
+         (file (car parts))
+         (search (cadr parts))
+         (dir (file-name-directory (or (alist-get 'file source)
+                                       (expand-file-name "x" orgzly-directory))))
+         (true (ignore-errors (file-truename (expand-file-name file dir))))
+         (book (and true
+                    (cl-find-if (lambda (b) (equal (ignore-errors (file-truename (alist-get 'file b))) true))
+                                (plist-get orgzly-state :books)))))
+    (when book
+      (if (and search (not (string-empty-p search)))
+          (orgzly--link-find-search search (alist-get 'name book))
+        (list :kind 'book :book (alist-get 'name book))))))
+
+(defun orgzly-link-route (target source)
+  "The Orgzly route an internal link TARGET written in SOURCE opens, or nil.
+Revived's rules: `id:' and `#custom-id' find the note (else notebook)
+carrying that ID or CUSTOM_ID, `file:' opens a notebook, and an Org
+`*Heading' search finds the heading in SOURCE's notebook."
+  (cond
+   ((string-match "\\`id:\\([^:]+\\)\\(?:::\\(.*\\)\\)?\\'" target)
+    (orgzly--link-find-property "ID" (string-trim (match-string 1 target))))
+   ((string-prefix-p "file:" target)
+    (orgzly--link-find-file (substring target 5) source))
+   ((string-match-p "\\`[#*]" target)
+    (or (orgzly--link-find-search target (alist-get 'book source))
+        (and (string-prefix-p "#" target)
+             (orgzly--link-find-property "CUSTOM_ID" (substring target 1)))))))
+
 (defun orgzly--on-link-open (args _params)
   "Open the link ARGS name by note, field and index in the snapshot.
 The device never sends a target: it names the note's `:id', the
 `:field' (\"title\" or \"content\") and the `:link' index, and the
-target is read back from the snapshot.  Only web and mail addresses
-open, through `browse-url'."
+target is read back from the snapshot.  A system link opens through
+`browse-url' (a Companion without `uri.open'); an internal link opens the
+note or notebook it names, and one naming nothing says so, as Revived's
+\"No such link target\"."
   (orgzly--guard
    (lambda ()
      (let* ((entry (orgzly-state-resolve (plist-get args :id)))
@@ -477,9 +551,16 @@ open, through `browse-url'."
             (index (plist-get args :link))
             (links (and text (seq-filter #'cdr (orgzly-ui-link-segments text))))
             (target (and (natnump index) (cdr (nth index links)))))
-       (if (and target (string-match-p "\\`\\(?:https?\\|mailto\\):" target))
-           (progn (browse-url target) 'accepted)
-         'rejected)))))
+       (cond
+        ((null target) 'rejected)
+        ((jetpacs-org-link-system-p target)
+         (browse-url target) 'accepted)
+        (t
+         (let ((route (orgzly-link-route target entry)))
+           (unless route (error "No such link target: %s" target))
+           (setq orgzly-state-draft nil orgzly-state-editing nil)
+           (orgzly--open route t)
+           'accepted)))))))
 
 (defun orgzly--on-fold-all (_args _params)
   "Cycle the open outline as Revived's Fold/Unfold All does.
@@ -1476,7 +1557,7 @@ Revived opens Android's document picker; this lists the Org files of
     (jetpacs-defaction "orgzly.ts.part" #'orgzly--on-ts-part :doc "Set a part of the open timestamp dialog: its day, times, cookies or checkboxes" :args '((:name part :type "enum" :required t)))
     (jetpacs-defaction "orgzly.note.timestamp" #'orgzly--on-note-timestamp :doc "Insert a picked timestamp into the open note's edited title or content" :args '((:name scope :type "string" :required t)))
     (jetpacs-defaction "orgzly.note.pick" #'orgzly--on-note-pick :doc "Pick the open note's state, priority or planning time" :args '((:name field :type "enum" :required t) (:name scope :type "string" :required t) (:name raw :type "string")))
-    (jetpacs-defaction "orgzly.link.open" #'orgzly--on-link-open :doc "Open a note's web or mail link, named by note, field and index" :args '((:name id :type "ref" :required t) (:name field :type "enum" :required t) (:name link :type "integer" :required t)))
+    (jetpacs-defaction "orgzly.link.open" #'orgzly--on-link-open :doc "Open a note's link, named by note, field and index" :args '((:name id :type "ref" :required t) (:name field :type "enum" :required t) (:name link :type "integer" :required t)))
     (jetpacs-defaction "orgzly.fold.all" #'orgzly--on-fold-all :doc "Unfold the open outline when anything is folded, else fold every foldable note")
     (jetpacs-defaction "orgzly.note.save" #'orgzly--on-note-save :doc "Commit captured note fields before accepting the edit" :args '((:name id :type "ref") (:name book-id :type "ref") (:name parent-id :type "ref")))
     (jetpacs-defaction "orgzly.note.back" #'orgzly--on-note-back :doc "Leave the open note, asking to save or discard an edit first" :args '((:name id :type "ref") (:name book-id :type "ref") (:name parent-id :type "ref")))

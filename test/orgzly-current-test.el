@@ -282,6 +282,48 @@ the snapshot's target, only for web and mail addresses."
         (should (eq 'rejected (orgzly--on-link-open (list :id id :field "content" :link 7) nil)))
         (should-not opened)))))
 
+(ert-deftest orgzly-current-internal-links-open-notes-and-notebooks ()
+  "Revived's internal links: `id:' and `#custom-id' open the note with that
+property, `file:' opens the notebook (or the heading its search names),
+a file-level ID opens the notebook, and a link naming nothing is refused."
+  (orgzly-test-with-snapshot
+    (with-temp-file (expand-file-name "ref.org" orgzly-directory)
+      (insert ":PROPERTIES:\n:ID: book-ref\n:END:\n#+TITLE: Ref\n\n"
+              "* Target note\n:PROPERTIES:\n:ID: note-1\n:CUSTOM_ID: tgt\n:END:\nBody\n"
+              "* Second\n"))
+    (orgzly-refresh (encode-time 0 30 14 9 7 2026))
+    (let* ((source (car (orgzly-state-entries "gtd")))
+           (target (cl-find "Target note" (orgzly-state-entries "ref")
+                            :key (lambda (e) (alist-get 'title e)) :test #'equal))
+           (second (cl-find "Second" (orgzly-state-entries "ref")
+                            :key (lambda (e) (alist-get 'title e)) :test #'equal))
+           (note (list :kind 'note :id (alist-get 'id target))))
+      (should (equal (orgzly-link-route "id:note-1" source) note))
+      (should (equal (orgzly-link-route "id:note-1::*Ignored" source) note))
+      (should (equal (orgzly-link-route "#tgt" source) note))
+      (should (equal (orgzly-link-route "id:book-ref" source) '(:kind book :book "ref")))
+      (should (equal (orgzly-link-route "file:ref.org" source) '(:kind book :book "ref")))
+      (should (equal (orgzly-link-route "file:./ref.org" source) '(:kind book :book "ref")))
+      (should (equal (orgzly-link-route "file:ref.org::*Second" source)
+                     (list :kind 'note :id (alist-get 'id second))))
+      (should (equal (orgzly-link-route "file:ref.org::#tgt" source) note))
+      (should-not (orgzly-link-route "id:missing" source))
+      (should-not (orgzly-link-route "file:missing.org" source))
+      (should-not (orgzly-link-route "file:/etc/passwd" source))
+      ;; The tap path: the snapshot's own text is followed, never the device's.
+      (setf (alist-get 'content source) "See [[id:note-1][it]], [[file:ref.org]] and id:nope")
+      (let (opened toasts)
+        (cl-letf (((symbol-function 'orgzly--open)
+                   (lambda (route &optional child) (setq opened (list route child)) 'accepted))
+                  ((symbol-function 'jetpacs-toast) (lambda (text &rest _) (push text toasts))))
+          (let ((id (alist-get 'id source)))
+            (should (eq 'accepted (orgzly--on-link-open (list :id id :field "content" :link 0) nil)))
+            (should (equal opened (list note t)))
+            (should (eq 'accepted (orgzly--on-link-open (list :id id :field "content" :link 1) nil)))
+            (should (equal opened '((:kind book :book "ref") t)))
+            (should (eq 'rejected (orgzly--on-link-open (list :id id :field "content" :link 2) nil)))
+            (should (string-match-p "No such link target" (car toasts)))))))))
+
 (ert-deftest orgzly-current-book-create-and-preface ()
   (orgzly-test-with-snapshot
     (should (eq 'accepted (let ((orgzly-field-scope (orgzly-field-scope '(:kind new-book))))
