@@ -744,3 +744,13 @@ to remove a cookie that is not there."
                             :key (lambda (e) (alist-get 'title e)) :test #'equal)))
         (should saved)
         (should (null (alist-get 'priority saved)))))))
+
+(ert-deftest orgzly-current-refused-save-is-told-to-the-device ()
+  "A refused submission toasts its reason, so a Save that cannot commit
+does not leave the user in a note whose prompt returns on every Back."
+  (let (toasts)
+    (cl-letf (((symbol-function 'jetpacs-toast) (lambda (text &rest _) (push text toasts))))
+      (should (eq 'rejected (orgzly--guard (lambda () (error "Invalid note fields")))))
+      (should (equal toasts '("Orgzly: Invalid note fields")))
+      (should (eq 'stale (orgzly--guard (lambda () (signal 'orgzly-stale nil)))))
+      (should (= (length toasts) 2)))))

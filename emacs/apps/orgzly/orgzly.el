@@ -62,11 +62,18 @@ A failed refresh cannot turn an already saved edit into a rejected occurrence."
   (orgzly--guard (lambda () (orgzly-refresh) (orgzly--open '(:kind books)))))
 
 (defun orgzly--guard (fn)
-  "Run submitted FN with closed stale/refused outcomes and no hidden prompts."
+  "Run submitted FN with closed stale/refused outcomes and no hidden prompts.
+A refusal is told to the device too: a Save that fails silently leaves
+the note modified, and its prompt returns on every Back."
   (condition-case err
       (funcall fn)
-    (orgzly-stale 'stale)
-    (error (message "Orgzly: %s" (error-message-string err)) 'rejected)))
+    (orgzly-stale
+     (ignore-errors (jetpacs-toast "Orgzly: the note changed elsewhere; refresh and retry"))
+     'stale)
+    (error
+     (message "Orgzly: %s" (error-message-string err))
+     (ignore-errors (jetpacs-toast (format "Orgzly: %s" (error-message-string err))))
+     'rejected)))
 
 (defun orgzly--field (params id &optional max)
   "Read the required captured field ID from PARAMS, bounded by MAX bytes."
