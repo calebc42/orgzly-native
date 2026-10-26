@@ -33,6 +33,21 @@ Closed later on 2026-10-25:
 - The period dialogs' hint follows the type wheel as it turns
   (`jetpacs.state_switch`), with no round trip.
 
+Closed later on 2026-10-26: **selection mode and subtree folding.** A long
+press selects a note (full-width secondary-container highlight); while
+anything is selected a tap toggles instead of opening, the top bar shows a
+back arrow, the count, Cut, Copy, Paste (above/under/below, one note), Move
+and an overflow Delete, and Revived's bottom bar holds Refile, Schedule,
+Deadline, State, Done and New note (one note), right-aligned on
+surface_container. Move swaps in the four arrows (promote, down, up,
+demote). Done, state, planning and moves keep the selection on the same
+notes. A long press on a fold button folds the whole subtree, or unfolds it
+if any of it is folded. Checked against Revived in split screen on the
+Pixel Tablet: top bar and bottom bar icons land on Revived's pixels.
+Open: the bar's 3px elevation shadow; Revived's Clock and Share in the
+selection overflow; selection in search and agenda results; the bullet's
+own tap and long press (Revived folds from the bullet too).
+
 Closed later on 2026-10-26: **the note popup.** A fling on a note row
 opens Revived's popup — a floating row of tonal icon buttons beside the
 finger — through EBP #207 popup swipe sides (`presentation: popup` on a

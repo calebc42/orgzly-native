@@ -835,3 +835,95 @@ is written without a form; both refresh in place."
                                                       :key (lambda (e) (alist-get 'title e)) :test #'equal))
                            "DONE"))
             (should pushed)))))))
+
+;;; Revived's selection mode and subtree folding
+
+(defmacro orgzly-test-with-outline (&rest body)
+  "Run BODY on the gtd outline with pushes and timers run inline."
+  (declare (indent 0))
+  `(orgzly-test-with-snapshot
+     (let ((orgzly-state-selected nil) (orgzly-state-moving nil)
+           (orgzly-state-folded nil) (orgzly-state-outline "gtd"))
+       (cl-letf (((symbol-function 'orgzly--later) (lambda (fn) (funcall fn)))
+                 ((symbol-function 'jetpacs-shell-push) #'ignore))
+         ,@body))))
+
+(defun orgzly-test--titles ()
+  "The gtd notebook's titles in order."
+  (mapcar (lambda (e) (alist-get 'title e)) (orgzly-state-entries "gtd")))
+
+(defun orgzly-test--id (title)
+  "The id of the gtd note starting with TITLE."
+  (alist-get 'id (cl-find-if (lambda (e) (string-prefix-p title (alist-get 'title e)))
+                             (orgzly-state-entries "gtd"))))
+
+(ert-deftest orgzly-current-long-press-selects-and-the-bars-change ()
+  "A long press selects; then a tap toggles, the top bar shows the count,
+cut, copy, paste, move and delete, and the bottom bar Revived's actions."
+  (orgzly-test-with-outline
+    (let ((route '(:kind book :book "gtd")))
+      (should (string-search "\"on_long_tap\"" (jetpacs-node->canonical-json (orgzly-ui-screen route))))
+      (orgzly--on-note-select (list :id (orgzly-test--id "Call mom")) nil)
+      (let ((json (jetpacs-node->canonical-json (orgzly-ui-screen route))))
+        (should (string-search "\"orgzly.row.selected\"" json))
+        (should (string-search "\"action\":\"orgzly.note.select\"" json))
+        (should-not (string-search "\"action\":\"orgzly.note.open\"" json))
+        (dolist (needle '("\"text\":\"1\"" "content_cut" "content_copy" "content_paste" "swap_vert"
+                          "Delete 1 note?" "\"bottom_bar\"" "today_filled" "flag_filled" "move_to_inbox"))
+          (should (string-search needle json))))
+      (orgzly--on-note-select (list :id (orgzly-test--id "Projects")) nil)
+      (let ((json (jetpacs-node->canonical-json (orgzly-ui-screen route))))
+        (should (string-search "\"text\":\"2\"" json))
+        (should-not (string-search "content_paste" json)))
+      (orgzly--on-select-move nil nil)
+      (let ((json (jetpacs-node->canonical-json (orgzly-ui-screen route))))
+        (should (string-search "arrow_upward" json))
+        (should-not (string-search "\"bottom_bar\"" json)))
+      (orgzly--on-select-back nil nil)
+      (should-not orgzly-state-moving)
+      (should (= (length orgzly-state-selected) 2))
+      (orgzly--on-select-back nil nil)
+      (should-not orgzly-state-selected))))
+
+(ert-deftest orgzly-current-selection-actions-keep-or-end-the-selection ()
+  "Done and moves keep the selection on the same notes; delete ends it."
+  (orgzly-test-with-outline
+    (orgzly--on-note-select (list :id (orgzly-test--id "Water plants")) nil)
+    (should (eq (orgzly--on-select-op '(:op "toggle") nil) 'accepted))
+    ;; A repeating task: Done reschedules it, and the selection stays on it.
+    (should (string-prefix-p "Water plants"
+                             (alist-get 'title (orgzly-state-resolve (car orgzly-state-selected)))))
+    (should (eq (orgzly--on-select-op '(:op "up") nil) 'accepted))
+    (should (= (cl-position "Water plants" (orgzly-test--titles) :test #'equal)
+               (1+ (cl-position "Projects" (orgzly-test--titles) :test #'equal))))
+    (should (string-prefix-p "Water plants"
+                             (alist-get 'title (orgzly-state-resolve (car orgzly-state-selected)))))
+    (should (eq (orgzly--on-select-op '(:op "promote") nil) 'accepted))
+    (should (= (alist-get 'level (orgzly-state-resolve (car orgzly-state-selected))) 1))
+    (should (eq (orgzly--on-select-op '(:op "delete") nil) 'accepted))
+    (should-not (member "Water plants" (orgzly-test--titles)))
+    (should-not orgzly-state-selected)))
+
+(ert-deftest orgzly-current-selection-copy-paste-under ()
+  "Copy a note, select another, paste under it: the copy becomes its child."
+  (orgzly-test-with-outline
+    (orgzly--on-note-select (list :id (orgzly-test--id "Call mom")) nil)
+    (orgzly--on-select-op '(:op "copy") nil)
+    (should-not orgzly-state-selected)
+    (orgzly--on-note-select (list :id (orgzly-test--id "Meeting")) nil)
+    (should (eq (orgzly--on-select-op '(:op "paste" :place "under") nil) 'accepted))
+    (let* ((entries (orgzly-state-entries "gtd"))
+           (last (car (last entries))))
+      (should (equal (alist-get 'title last) "Call mom"))
+      (should (= (alist-get 'level last) 2)))))
+
+(ert-deftest orgzly-current-long-press-on-fold-toggles-the-subtree ()
+  "Nothing folded: the whole subtree folds; anything folded: all of it unfolds."
+  (orgzly-test-with-outline
+    (let ((projects (orgzly-test--id "Projects")))
+      (should (string-search "\"orgzly.note.fold-subtree\""
+                             (jetpacs-node->canonical-json (orgzly-ui-screen '(:kind book :book "gtd")))))
+      (orgzly--on-fold-subtree (list :id projects) nil)
+      (should (member projects orgzly-state-folded))
+      (orgzly--on-fold-subtree (list :id projects) nil)
+      (should-not orgzly-state-folded))))

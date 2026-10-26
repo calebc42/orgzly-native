@@ -287,7 +287,7 @@ let a template bind."
        (orgzly-ui-styled "orgzly.preface"
                          (orgzly-ui-styled-text "orgzly.t.preface" (gethash "preface" item)))
      (orgzly-ui-styled
-      "orgzly.row.box"
+      (if (gethash "selected" item) '("orgzly.row.box" "orgzly.row.selected") "orgzly.row.box")
       (apply
        #'jetpacs-row
        (append
@@ -297,13 +297,16 @@ let a template bind."
          (jetpacs-with-attrs
           (apply #'jetpacs-design-pressable
                  (append (gethash "styles" item) nil)
-                 (orgzly-ui-action "orgzly.note.open" (list :id (gethash "id" item)))
+                 ;; Revived: with a selection, a tap toggles instead of opening.
+                 (orgzly-ui-action (if orgzly-state-selected "orgzly.note.select" "orgzly.note.open")
+                                   (list :id (gethash "id" item)))
                  (list
                   (jetpacs-row
                    (orgzly-ui--bullet (gethash "ring" item))
                    (jetpacs-spacer :width 8)
                    (jetpacs-with-attrs (orgzly-ui--row-column item) :weight 1)
                    :align "top"))
+                 :on-long-tap (orgzly-ui-action "orgzly.note.select" (list :id (gethash "id" item)))
                  (orgzly-ui-note-swipes (gethash "id" item)))
           :weight 1)
          (let ((width (orgzly-design-fold-width (jetpacs-window))))
@@ -314,7 +317,10 @@ let a template bind."
                '("orgzly.fold") (orgzly-ui-action "orgzly.note.fold" (list :id (gethash "id" item)))
                (list (jetpacs-with-attrs
                       (orgzly-ui-styled-text "orgzly.t.fold" (gethash "fold" item))
-                      :width width)))
+                      :width width))
+               ;; "Long-click the icon to unfold the entire subtree."
+               :on-long-tap (orgzly-ui-action "orgzly.note.fold-subtree"
+                                              (list :id (gethash "id" item))))
               :width width)))
          :align "top")))))
    :key (gethash "id" item)))
@@ -347,6 +353,7 @@ let a template bind."
     (puthash "depth" (min orgzly-ui-max-guides level) row)
     (puthash "styles" ["orgzly.head"] row)
     (puthash "faded" (and (orgzly-ui--faded-p entry) t) row)
+    (puthash "selected" (and (member id orgzly-state-selected) t) row)
     (puthash "ring" (and folded (alist-get 'has-children entry) t) row)
     (puthash "spans" (vconcat (orgzly-ui-title-spans entry)) row)
     (dolist (p orgzly-ui--planning)
@@ -1576,9 +1583,86 @@ An empty part shares nothing, as Revived's does."
    (orgzly-ui-dark) (jetpacs-window)
    (jetpacs-menu (orgzly-ui--overflow-items route) :icon "more_vert")))
 
+(defun orgzly-ui-selecting-p (route)
+  "Non-nil when ROUTE's outline is in Revived's selection mode."
+  (and (eq (plist-get route :kind) 'book) orgzly-state-selected t))
+
+(defun orgzly-ui--select-action (op &optional args confirm)
+  "The selection's OP as an action, with ARGS and an optional CONFIRM."
+  (orgzly-ui-action "orgzly.select.op" (append (list :op op) args) confirm))
+
+(defun orgzly-ui--place-menu (icon label op)
+  "A menu under ICON offering above, under and below for OP; LABEL names it."
+  (ignore label)
+  (jetpacs-menu
+   (list (jetpacs-menu-item "Above" (orgzly-ui--select-action op '(:place "above")) :icon "add_above")
+         (jetpacs-menu-item "Under" (orgzly-ui--select-action op '(:place "under")) :icon "add_under")
+         (jetpacs-menu-item "Below" (orgzly-ui--select-action op '(:place "below")) :icon "add_below"))
+   :icon icon))
+
+(defun orgzly-ui--selection-actions ()
+  "Revived's book_cab_top: cut, copy, paste and move, or the move arrows.
+Paste needs exactly one selected note; Delete waits in the overflow."
+  (let ((text (orgzly-design-color 'text (orgzly-ui-dark)))
+        (one (= (length orgzly-state-selected) 1)))
+    (if orgzly-state-moving
+        (mapcar (lambda (b)
+                  (jetpacs-icon-button (nth 0 b) (orgzly-ui--select-action (nth 1 b))
+                                       :content-description (nth 2 b) :color text))
+                '(("arrow_back" "promote" "Move left") ("arrow_downward" "down" "Move down")
+                  ("arrow_upward" "up" "Move up") ("arrow_forward" "demote" "Move right")))
+      (append
+       (list (jetpacs-icon-button "content_cut" (orgzly-ui--select-action "cut")
+                                  :content-description "Cut" :color text)
+             (jetpacs-icon-button "content_copy" (orgzly-ui--select-action "copy")
+                                  :content-description "Copy" :color text))
+       (when one (list (orgzly-ui--place-menu "content_paste" "Paste" "paste")))
+       (list (jetpacs-icon-button "swap_vert" (orgzly-ui-action "orgzly.select.move")
+                                  :content-description "Move" :color text)
+             (jetpacs-spacer :width 4)
+             (orgzly-ui-styled
+              "orgzly.overflow"
+              (orgzly-design-overflow-scope
+               (orgzly-ui-dark) (jetpacs-window)
+               (jetpacs-menu
+                (list (jetpacs-menu-item
+                       "Delete" (orgzly-ui--select-action
+                                 "delete" nil
+                                 (format "Delete %d note%s?" (length orgzly-state-selected)
+                                         (if one "" "s")))))
+                :icon "more_vert"))))))))
+
+(defun orgzly-ui-selection-bottom-bar ()
+  "Revived's book_cab_bottom: refile, schedule, deadline, state, done, new note.
+The BottomAppBar ends its actions 8dp from the edge; New note needs
+exactly one selected note."
+  (let ((text (orgzly-design-color 'text (orgzly-ui-dark)))
+        (one (= (length orgzly-state-selected) 1)))
+    (orgzly-ui-styled
+     "orgzly.bottom-bar"
+     (apply #'jetpacs-row
+            (append
+             (delq nil
+                   (list
+                    (jetpacs-with-attrs (jetpacs-spacer) :weight 1)
+                    (jetpacs-icon-button "move_to_inbox" (orgzly-ui--select-action "refile")
+                                         :content-description "Refile" :color text)
+                    (jetpacs-icon-button "today_filled" (orgzly-ui--select-action "scheduled")
+                                         :content-description "Schedule" :color text)
+                    (jetpacs-icon-button "alarm" (orgzly-ui--select-action "deadline")
+                                         :content-description "Deadline" :color text)
+                    (jetpacs-icon-button "flag_filled" (orgzly-ui--select-action "state")
+                                         :content-description "State" :color text)
+                    (jetpacs-icon-button "check_circle_outline" (orgzly-ui--select-action "toggle")
+                                         :content-description "Done" :color text)
+                    (when one (orgzly-ui--place-menu "add" "New note" "new"))
+                    (jetpacs-spacer :width 8)))
+             '(:align "center"))))))
+
 (defun orgzly-ui--toolbar-actions (route)
   "The top app bar's trailing actions on ROUTE's screen, as Revived places them.
 The 48dp action buttons abut; the overflow sits 4dp after them."
+  (if (orgzly-ui-selecting-p route) (orgzly-ui--selection-actions)
   (let ((text (orgzly-design-color 'text (orgzly-ui-dark)))
         (kind (plist-get route :kind)))
     (append
@@ -1609,7 +1693,7 @@ The 48dp action buttons abut; the overflow sits 4dp after them."
                                       :content-description "Insert timestamp" :color text)))))
      (unless (eq kind 'settings)
        (list (jetpacs-spacer :width 4)
-             (orgzly-ui-styled "orgzly.overflow" (orgzly-ui--overflow route)))))))
+             (orgzly-ui-styled "orgzly.overflow" (orgzly-ui--overflow route))))))))
 
 (defconst orgzly-ui-settings
   '(("look" "Look & Feel" "palette_filled"
@@ -1762,7 +1846,8 @@ TOGGLED, t or `:json-false', makes the row a toggle for accessibility."
                        (_ "Orgzly")))
          ;; Drawer destinations wear the hamburger, as in Revived; forms
          ;; opened from them keep the back arrow.
-         (top (memq kind '(books book searches query note new-note)))
+         (selecting (orgzly-ui-selecting-p route))
+         (top (and (not selecting) (memq kind '(books book searches query note new-note))))
          (searching (and orgzly-state-searching (memq kind '(books book searches query))))
          (nodes
           (pcase kind
@@ -1783,14 +1868,19 @@ TOGGLED, t or `:json-false', makes the row a toggle for accessibility."
                      (if (memq kind '(new-book book-edit save-search))
                          (jetpacs-with-attrs list-node :padding 16)
                        list-node)))))
+         (title (if selecting (number-to-string (length orgzly-state-selected)) title))
          (screen (jetpacs-chrome-screen
                   title body
-                  ;; Searching, the arrow closes the field as Revived's does.
-                  :back (if searching (orgzly-ui-action "orgzly.search.close") (unless top back))
+                  ;; Searching, the arrow closes the field as Revived's does;
+                  ;; selecting, it leaves move mode, then the selection.
+                  :back (cond (selecting (orgzly-ui-action "orgzly.select.back"))
+                              (searching (orgzly-ui-action "orgzly.search.close"))
+                              (t (unless top back)))
                   ;; The hamburger stays, and back still returns below.
                   ;; A note asks before an edit is left, as Revived's does.
                   ;; A remote back gesture names the surface it keeps.
-                  :on-back (cond ((memq kind '(note new-note))
+                  :on-back (cond (selecting (orgzly-ui-action "orgzly.select.back"))
+                                 ((memq kind '(note new-note))
                                   (jetpacs-shell-action-opening-surface
                                    "orgzly.note.back" (jetpacs-shell-surface-for "orgzly")
                                    :args (orgzly-ui--note-args route) :when-offline "drop"
@@ -1798,14 +1888,26 @@ TOGGLED, t or `:json-false', makes the row a toggle for accessibility."
                                                            (orgzly-ui-note-captures route))))
                                  ((and top (not searching)) back))
                   :drawer (and top (not searching) (orgzly-ui-drawer route))
-                  :fab (orgzly-ui-fab route)
-                  :on-refresh (and (memq kind '(books book))
+                  :fab (unless selecting (orgzly-ui-fab route))
+                  :bottom-bar (and selecting (not orgzly-state-moving)
+                                   (orgzly-ui-selection-bottom-bar))
+                  :on-refresh (and (not selecting) (memq kind '(books book))
                                    (orgzly-ui-action "orgzly.refresh"))
                   :actions (orgzly-ui--toolbar-actions route)))
          (bar (plist-get screen :top_bar)))
     (plist-put bar :spacing 0)
+    ;; Selecting, the arrow is the Toolbar's navigation button: centred
+    ;; 36dp in, the count 7.5dp after it, as Revived's selection bar draws.
+    (when selecting
+      (let ((children (plist-get bar :children)))
+        (when (and (> (length children) 0)
+                   (equal (plist-get (aref children 0) :icon) "arrow_back"))
+          (aset children 0 (jetpacs-with-attrs (aref children 0) :width 40))
+          (plist-put bar :children
+                     (vconcat (list (aref children 0) (jetpacs-spacer :width 7.5))
+                              (seq-drop children 1))))))
     ;; From 600dp up AppCompat widens the toolbar's insets by 8dp a side.
-    (unless (equal (jetpacs-window-class :width) "compact")
+    (unless (or selecting (equal (jetpacs-window-class :width) "compact"))
       (setq screen (plist-put screen :top_bar (jetpacs-with-attrs bar :pad '(:horizontal 8)))
             bar (plist-get screen :top_bar)))
     ;; The M3 small top app bar draws the hamburger; its title slot is this

@@ -21,6 +21,12 @@ Follows the device's appearance (SPEC 20.1.3) until the user picks one.")
 (defvar orgzly-state-theme-chosen nil
   "Non-nil once the user toggled the theme; nil follows the device.")
 (defvar orgzly-state-page 0 "Zero-based page in the active outline or search.")
+(defvar orgzly-state-selected nil
+  "Opaque ids of the outline's selected notes, in selection order.
+Revived's selection mode: a long press selects, and while anything is
+selected a tap toggles a note instead of opening it.")
+(defvar orgzly-state-moving nil
+  "Non-nil while the selection's top bar offers Revived's move arrows.")
 (defvar orgzly-state-draft nil
   "The open note's picked values, saved by Done.
 A plist (:scope FORM-ID [:state S] [:priority P] [:scheduled RAW]

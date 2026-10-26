@@ -435,6 +435,13 @@ Revived's popup ends at its button, which sits 4dp from the window edge,
        ;; FAB: 56dp, 16dp corners, 16dp from the edges.
        ;; Revived's note popup buttons: Material 3 filled tonal icon
        ;; buttons, the secondary container with its on-color glyph.
+       ;; A selected row: Revived's Selection paints colorSecondaryContainer.
+       ("orgzly.row.selected" . ,(orgzly-design--box :background_color (funcall c 'pill)))
+       ;; Revived's BottomAppBar under a selection: 64dp on surface_container.
+       ("orgzly.bottom-bar" . ,(orgzly-design--box :fill_width t :height 64))
+       ;; The scaffold's bottom bar container: surface_container, no padding.
+       ("orgzly.chrome.bottom-bar" . ,(orgzly-design--box :background_color (funcall c 'menu)
+                                                          :padding 0))
        ("orgzly.popup.button" . ,(orgzly-design--box :background_color (funcall c 'pill)
                                                       :content_color (funcall c 'on-pill)))
        ("orgzly.fab" . ,(orgzly-design--box :width 56 :height 56 :corner_radius 16 :elevation 6
@@ -612,6 +619,7 @@ Revived's popup ends at its button, which sits 4dp from the window edge,
      :component-styles
      '(("chrome.drawer" . ("orgzly.drawer.sheet"))
        ("swipe.popup-button" . ("orgzly.popup.button"))
+       ("chrome.bottom-bar" . ("orgzly.chrome.bottom-bar"))
        ("picker.container" . ("orgzly.ts.picker"))
        ("picker.label" . ("orgzly.t.ts-picker"))
        ("menu.trigger" . ("orgzly.overflow.icon"))

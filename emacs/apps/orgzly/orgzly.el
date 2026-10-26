@@ -28,7 +28,8 @@
 
 (defun orgzly--open (route &optional child)
   "Schedule ROUTE on Orgzly's surface; CHILD retains the current parent screen."
-  (setq orgzly-state-page 0 orgzly-state-searching nil)
+  (setq orgzly-state-page 0 orgzly-state-searching nil
+        orgzly-state-selected nil orgzly-state-moving nil)
   ;; The data document follows the outline screen on the stack.
   (setq orgzly-state-outline
         (pcase (plist-get route :kind)
@@ -232,6 +233,213 @@ Set writes the note's planning line at once; the row has no draft."
                       (let ((orgzly-data--transaction t))
                         (orgzly-data-set-state entry (unless (equal value "__none__") value)))
                       (save-buffer))))))))))
+       'accepted))))
+
+;;; Revived's selection mode
+
+(defun orgzly--on-note-select (args _params)
+  "Toggle ARGS' note in the outline's selection, as a long press does."
+  (orgzly--guard
+   (lambda ()
+     (let ((id (alist-get 'id (orgzly-state-resolve (plist-get args :id)))))
+       (setq orgzly-state-selected
+             (if (member id orgzly-state-selected) (delete id orgzly-state-selected)
+               (append orgzly-state-selected (list id))))
+       (unless orgzly-state-selected (setq orgzly-state-moving nil))
+       (orgzly--present-outline)
+       'accepted))))
+
+(defun orgzly--on-select-back (_args _params)
+  "Back in selection mode: leave the move arrows, else clear the selection."
+  (if orgzly-state-moving (setq orgzly-state-moving nil)
+    (setq orgzly-state-selected nil))
+  (orgzly--present-outline)
+  'accepted)
+
+(defun orgzly--on-select-move (_args _params)
+  "Show Revived's move arrows for the selection."
+  (setq orgzly-state-moving (and orgzly-state-selected t))
+  (orgzly--present-outline)
+  'accepted)
+
+(defun orgzly--selection-entries ()
+  "The selected notes' current entries, in document order."
+  (sort (mapcar (lambda (id) (orgzly-state-resolve id t)) orgzly-state-selected)
+        (lambda (a b) (< (alist-get 'pos a) (alist-get 'pos b)))))
+
+(defun orgzly--selection-commit (fn &optional keep)
+  "Run FN over the selection in one saved change; KEEP the selection after.
+FN gets the entries in document order and a marker at each heading: a
+note's ref must be taken at its marker when FN reaches it, since edits
+above shift it.  A moved subtree loses its marker, so FN sets it again.
+The selection is re-found through the markers after the refresh."
+  (let* ((entries (orgzly--selection-entries))
+         (book (alist-get 'book (car entries)))
+         (buf (orgzly-data--book-buffer book))
+         (marks (with-current-buffer buf
+                  (mapcar (lambda (e) (copy-marker (alist-get 'pos e))) entries))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (atomic-change-group
+              (let ((orgzly-data--transaction t)) (funcall fn entries marks))
+              (save-buffer)))
+          (orgzly-refresh)
+          (setq orgzly-state-selected
+                (when keep
+                  (delq nil
+                        (mapcar
+                         (lambda (m)
+                           (when (marker-buffer m)
+                             (let ((pos (with-current-buffer buf
+                                          (save-excursion
+                                            (goto-char m) (org-back-to-heading t) (point)))))
+                               (alist-get 'id (cl-find-if (lambda (e) (= (alist-get 'pos e) pos))
+                                                          (orgzly-state-entries book))))))
+                         marks)))))
+      (mapc (lambda (m) (set-marker m nil)) marks))
+    (unless orgzly-state-selected (setq orgzly-state-moving nil))
+    (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))
+    'accepted))
+
+(defun orgzly--ref-at (entry marker)
+  "ENTRY's data ref at MARKER's current position."
+  (cons (cons 'pos (marker-position marker)) (orgzly-data-entry-ref entry)))
+
+(defun orgzly--selection-each (fn &optional keep reverse)
+  "Commit FN (REF) on every selected note; KEEP the selection, REVERSE order."
+  (orgzly--selection-commit
+   (lambda (entries marks)
+     (let ((pairs (cl-mapcar #'cons entries marks)))
+       (dolist (pair (if reverse (reverse pairs) pairs))
+         (funcall fn (orgzly--ref-at (car pair) (cdr pair))))))
+   keep))
+
+(defun orgzly--selection-move (move &optional reverse)
+  "Move every selected subtree with Org's MOVE command, keeping the selection.
+REVERSE walks the notes bottom up, as moving down needs.  Org leaves
+point on the moved heading, which re-anchors its marker."
+  (orgzly--selection-commit
+   (lambda (entries marks)
+     (let ((pairs (cl-mapcar #'cons entries marks)))
+       (dolist (pair (if reverse (reverse pairs) pairs))
+         (goto-char (cdr pair))
+         (org-back-to-heading t)
+         (funcall move)
+         (org-back-to-heading t)
+         (set-marker (cdr pair) (point)))))
+   t))
+
+(defun orgzly--paste-at (place entry marker)
+  "Paste the clipboard subtree at PLACE, above, under or below ENTRY at MARKER."
+  (goto-char marker)
+  (org-back-to-heading t)
+  (let ((level (org-current-level)))
+    (pcase place
+      ("above" (org-paste-subtree level))
+      ("under" (org-end-of-subtree t t) (unless (bolp) (insert "\n"))
+               (org-paste-subtree (1+ level)))
+      (_ (org-end-of-subtree t t) (unless (bolp) (insert "\n"))
+         (org-paste-subtree level))))
+  (ignore entry))
+
+(defun orgzly--on-select-op (args _params)
+  "Run Revived's selection action ARGS' `:op' on the selected notes."
+  (let ((op (plist-get args :op)) (place (plist-get args :place)))
+    (orgzly--guard
+     (lambda ()
+       (unless orgzly-state-selected (error "Nothing is selected"))
+       (let ((one (= (length orgzly-state-selected) 1)))
+         (pcase op
+           ("toggle" (orgzly--selection-each #'orgzly-data-toggle-done t))
+           ("promote" (orgzly--selection-move #'org-promote-subtree))
+           ("demote" (orgzly--selection-move #'org-demote-subtree))
+           ("up" (orgzly--selection-move #'org-move-subtree-up))
+           ("down" (orgzly--selection-move #'org-move-subtree-down t))
+           ("copy"
+            (orgzly-data-copy-notes (mapcar #'orgzly-data-entry-ref (orgzly--selection-entries)))
+            (setq orgzly-state-selected nil orgzly-state-moving nil)
+            (orgzly--present-outline) 'accepted)
+           ("cut"
+            (orgzly-data-copy-notes (mapcar #'orgzly-data-entry-ref (orgzly--selection-entries)))
+            (orgzly--selection-each (lambda (ref) (let ((orgzly-data--transaction t))
+                                                    (orgzly-data-delete-note ref)))
+                                    nil t))
+           ("delete"
+            (orgzly--selection-each (lambda (ref) (let ((orgzly-data--transaction t))
+                                                    (orgzly-data-delete-note ref)))
+                                    nil t))
+           ("paste"
+            (unless (and one (member place '("above" "under" "below"))) (error "Paste needs one note"))
+            (orgzly--selection-commit
+             (lambda (entries marks) (orgzly--paste-at place (car entries) (car marks)))))
+           ("refile"
+            (orgzly--choices
+             "select-refile" "Refile to"
+             (mapcar (lambda (b) (cons (alist-get 'title b) (alist-get 'name b)))
+                     (plist-get orgzly-state :books))
+             (lambda (name)
+               (orgzly--guard
+                (lambda ()
+                  (orgzly--selection-each
+                   (lambda (ref) (let ((orgzly-data--transaction t)) (orgzly-data-refile ref name)))
+                   nil t)))))
+            'accepted)
+           ("edit"
+            (unless one (error "Edit needs one note"))
+            (orgzly--on-note-open (list :id (car orgzly-state-selected)) nil))
+           ("new"
+            (unless one (error "A new note needs one note"))
+            (orgzly--on-note-place (list :id (car orgzly-state-selected) :place place) nil))
+           ((or "scheduled" "deadline")
+            (let ((entry (car (orgzly--selection-entries))))
+              (orgzly--ts-open nil (concat "select-" op)
+                               (if one (or (alist-get 'raw (alist-get (intern op) entry)) "") ""))
+              'accepted))
+           ("state"
+            (orgzly--choices
+             "select-state" "State"
+             (append (mapcar (lambda (kw) (cons kw kw)) (orgzly--pick-choices "state"))
+                     '(("None" . "__none__")))
+             (lambda (value)
+               (orgzly--guard
+                (lambda ()
+                  (orgzly--selection-each
+                   (lambda (ref) (orgzly-data-set-state ref (unless (equal value "__none__") value)))
+                   t)))))
+            'accepted)
+           (_ 'rejected)))))))
+
+(defun orgzly--selection-plan (kind stamp)
+  "Set every selected note's planning KIND to STAMP, or clear it when nil."
+  (orgzly--guard
+   (lambda ()
+     (orgzly--selection-each
+      (lambda (ref) (orgzly-data-set-planning ref kind (and stamp (orgzly--planning stamp))))
+      t))))
+
+(defun orgzly--on-fold-subtree (args _params)
+  "Fold the whole subtree of ARGS' note, or unfold it if any of it is folded.
+Revived's long press on a fold button."
+  (orgzly--guard
+   (lambda ()
+     (let* ((entry (orgzly-state-resolve (plist-get args :id)))
+            (entries (orgzly-state-entries (alist-get 'book entry)))
+            (tail (cl-member (alist-get 'id entry) entries
+                             :key (lambda (e) (alist-get 'id e)) :test #'equal))
+            (level (alist-get 'level entry))
+            (subtree (cons (car tail)
+                           (cl-loop for e in (cdr tail)
+                                    while (> (alist-get 'level e) level) collect e)))
+            (ids (mapcar (lambda (e) (alist-get 'id e)) subtree)))
+       (unless (alist-get 'pos entry) (error "Expected a note"))
+       (setq orgzly-state-folded
+             (if (cl-some (lambda (id) (member id orgzly-state-folded)) ids)
+                 (cl-remove-if (lambda (id) (member id ids)) orgzly-state-folded)
+               (append (mapcar (lambda (e) (alist-get 'id e))
+                               (cl-remove-if-not #'orgzly-ui--foldable-p subtree))
+                       orgzly-state-folded)))
+       (orgzly--present-outline)
        'accepted))))
 
 (defun orgzly--present-outline ()
@@ -639,6 +847,9 @@ A pick re-shows it, so the request it replaces concludes unanswered."
     (pcase field
       ((or "scheduled" "deadline")
        (orgzly--draft-put scope field (if (equal value "set") stamp "")))
+      ;; The selection's Schedule or Deadline: every selected note at once.
+      ((or "select-scheduled" "select-deadline")
+       (orgzly--selection-plan (intern (substring field 7)) (and (equal value "set") stamp)))
       ;; A row's popup button: the planning line is written at once.
       ((or "row-scheduled" "row-deadline")
        (orgzly--row-plan (plist-get ts :id) (intern (substring field 4))
@@ -1248,6 +1459,11 @@ Revived opens Android's document picker; this lists the Org files of
     (jetpacs-defaction "orgzly.note.open" #'orgzly--on-note-open :doc "Open the note represented by an opaque revision id" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.new" #'orgzly--on-note-new :doc "Open a new-note form in the current notebook" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.child" #'orgzly--on-note-child :doc "Open a child-note form under the current note" :args '((:name id :type "ref" :required t)))
+    (jetpacs-defaction "orgzly.note.select" #'orgzly--on-note-select :doc "Toggle a note in the outline's selection" :args '((:name id :type "ref" :required t)))
+    (jetpacs-defaction "orgzly.note.fold-subtree" #'orgzly--on-fold-subtree :doc "Fold or unfold a note's whole subtree" :args '((:name id :type "ref" :required t)))
+    (jetpacs-defaction "orgzly.select.back" #'orgzly--on-select-back :doc "Leave the move arrows, else clear the selection")
+    (jetpacs-defaction "orgzly.select.move" #'orgzly--on-select-move :doc "Show the move arrows for the selection")
+    (jetpacs-defaction "orgzly.select.op" #'orgzly--on-select-op :doc "Run a selection action on the selected notes" :args '((:name op :type "enum" :required t) (:name place :type "enum")))
     (jetpacs-defaction "orgzly.note.place" #'orgzly--on-note-place :doc "Open a new-note form above, under or below the current note" :args '((:name id :type "ref" :required t) (:name place :type "enum" :required t)))
     (jetpacs-defaction "orgzly.note.plan" #'orgzly--on-note-plan :doc "Pick the current note's scheduled or deadline time from its row" :args '((:name id :type "ref" :required t) (:name field :type "enum" :required t)))
     (jetpacs-defaction "orgzly.note.state" #'orgzly--on-note-state :doc "Pick the current note's TODO state from its row" :args '((:name id :type "ref" :required t)))
