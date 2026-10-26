@@ -33,6 +33,16 @@ Closed later on 2026-10-25:
 - The period dialogs' hint follows the type wheel as it turns
   (`jetpacs.state_switch`), with no round trip.
 
+Closed later on 2026-10-26: **links.** Bare links follow Revived's
+OrgFormatter: its system schemes (http, https, mailto, tel, voicemail, geo,
+sms, smsto, mms, mmsto) up to the next whitespace, starting a word, so
+`tel:555-0199),` underlines as Revived's does. A system link's tap is the
+EBP #208 `uri.open` builtin, opened on the device by Android's ACTION_VIEW,
+as Revived's URLSpan opens it: verified on the Pixel Tablet for tel
+(Contacts, the tablet has no dialer), sms (Messages), mailto (mail chooser)
+and both web links (Chrome). Open: `id:` and `file:` links to notes and
+notebooks inside the app.
+
 Closed later on 2026-10-26: **selection mode and subtree folding.** A long
 press selects a note (full-width secondary-container highlight); while
 anything is selected a tap toggles instead of opening, the top bar shows a

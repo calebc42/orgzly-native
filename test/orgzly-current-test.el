@@ -251,11 +251,12 @@ to the notebooks under the drawer's menu button."
         (should-not (equal (plist-get leading :icon) "arrow_back"))))))
 
 (ert-deftest orgzly-current-links-open-from-the-snapshot ()
-  "A link span names note, field and index; Emacs opens the snapshot's
-target, only for web and mail addresses."
+  "Without `uri.open' a link span names note, field and index; Emacs opens
+the snapshot's target, only for web and mail addresses."
   (should (equal (orgzly-ui-link-segments "See [[https://a.example/x][docs]] or https://b.example.")
+                 ;; Revived's bare link runs to the next whitespace, stop and all.
                  '(("See " . nil) ("docs" . "https://a.example/x") (" or " . nil)
-                   ("https://b.example" . "https://b.example") ("." . nil))))
+                   ("https://b.example." . "https://b.example."))))
   (should (equal (orgzly-ui-link-segments "[[file:notes.org]]")
                  '(("file:notes.org" . "file:notes.org"))))
   (orgzly-test-with-snapshot
@@ -263,7 +264,9 @@ target, only for web and mail addresses."
            (id (alist-get 'id entry))
            opened)
       (setf (alist-get 'content entry) "Read [[https://a.example/x][docs]] and [[file:x.org][x]]")
-      (let* ((spans (orgzly-ui-org-spans (alist-get 'content entry) id "content"))
+      ;; A Companion without `uri.open': every link goes to Emacs.
+      (let* ((spans (cl-letf (((symbol-function 'jetpacs-builtin-advertised-p) #'ignore))
+                      (orgzly-ui-org-spans (alist-get 'content entry) id "content")))
              (link (cl-find-if (lambda (s) (plist-get s :on_tap)) spans)))
         (should (equal (plist-get link :text) "docs"))
         (should (plist-get link :underline))
@@ -927,3 +930,33 @@ cut, copy, paste, move and delete, and the bottom bar Revived's actions."
       (should (member projects orgzly-state-folded))
       (orgzly--on-fold-subtree (list :id projects) nil)
       (should-not orgzly-state-folded))))
+
+;;; Links (EBP #208 uri.open)
+
+(ert-deftest orgzly-current-links-split-as-revived-finds-them ()
+  "Bare links of Revived's system schemes run to the next whitespace and
+only start a word; bracket links show their description."
+  (should (equal (orgzly-ui-link-segments "Dial (tel:555-0199), or SMS (sms:555-0199).")
+                 '(("Dial (" . nil) ("tel:555-0199)," . "tel:555-0199),") (" or SMS (" . nil)
+                   ("sms:555-0199)." . "sms:555-0199)."))))
+  (should (equal (orgzly-ui-link-segments "See https://example.org/docs#links for more")
+                 '(("See " . nil) ("https://example.org/docs#links" . "https://example.org/docs#links")
+                   (" for more" . nil))))
+  (should (equal (orgzly-ui-link-segments "x:tel:1 and a@mailto:b")
+                 '(("x:tel:1 and a@mailto:b" . nil))))
+  (should (equal (orgzly-ui-link-segments "visit [[https://orgzlyrevived.com][Orgzlyrevived.com]].")
+                 '(("visit " . nil) ("Orgzlyrevived.com" . "https://orgzlyrevived.com") ("." . nil)))))
+
+(ert-deftest orgzly-current-system-links-open-on-the-device ()
+  "With `uri.open' advertised a system link's tap is the builtin carrying
+its target; an Org-internal link still goes to Emacs."
+  (cl-letf (((symbol-function 'jetpacs-builtin-advertised-p) (lambda (&rest _) t)))
+    (let ((spans (orgzly-ui-org-spans "Call tel:555-0199 or see [[id:abc][that note]]" "oz-x" "content")))
+      (should (equal (plist-get (plist-get (nth 1 spans) :on_tap) :builtin) "uri.open"))
+      (should (equal (plist-get (plist-get (nth 1 spans) :on_tap) :uri) "tel:555-0199"))
+      (should (equal (plist-get (plist-get (car (last spans)) :on_tap) :action) "orgzly.link.open"))))
+  (cl-letf (((symbol-function 'jetpacs-builtin-advertised-p) (lambda (&rest _) nil)))
+    (should (equal (plist-get (plist-get (nth 1 (orgzly-ui-org-spans "Call tel:555-0199" "oz-x" "content"))
+                                         :on_tap)
+                              :action)
+                   "orgzly.link.open"))))

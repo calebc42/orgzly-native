@@ -86,39 +86,64 @@ neither starts nor ends with a space, as Org's own emphasis rule does."
       (push (apply #'jetpacs-span (substring text start) base) spans))
     (nreverse spans)))
 
+(defconst orgzly-ui--system-schemes
+  "https?\\|mailto\\|tel\\|voicemail\\|geo\\|sms\\|smsto\\|mms\\|mmsto"
+  "Revived's SYSTEM_LINK_SCHEMES: links the device's own apps open.")
+
 (defconst orgzly-ui--link-re
-  (concat "\\[\\[\\([^]\n]+\\)\\]\\(?:\\[\\([^]\n]+\\)\\]\\)?\\]"
-          "\\|\\(\\(?:https?\\|mailto\\):[^][<>\"[:space:]]*[^][<>\"[:space:].,;:!?)]\\)")
-  "An Org bracket link, or a bare web or mail address, as Revived links them.")
+  (concat "\\[\\[\\(.+?\\)\\]\\(?:\\[\\(.+?\\)\\]\\)?\\]"
+          "\\|\\(\\(?:" orgzly-ui--system-schemes "\\|id\\|file\\):[^[:space:]]+\\)")
+  "An Org bracket link, or a bare link as Revived's OrgFormatter finds it:
+a known scheme and everything up to the next whitespace.")
+
+(defun orgzly-ui-system-link-p (target)
+  "Non-nil when TARGET is a link the device's own apps open, as in Revived."
+  (and (stringp target)
+       (string-match-p (concat "\\`\\(?:" orgzly-ui--system-schemes "\\):.+") target)))
 
 (defun orgzly-ui-link-segments (text)
   "Split Org TEXT into (STRING . TARGET) segments; TARGET is nil for prose.
 A bracket link shows its description, or its target when it has none."
-  (let ((start 0) segments)
-    (while (string-match orgzly-ui--link-re text start)
+  (let ((start 0) (from 0) segments)
+    (while (string-match orgzly-ui--link-re text from)
       (let ((target (or (match-string 1 text) (match-string 3 text)))
-            (shown (or (match-string 2 text) (match-string 1 text) (match-string 3 text))))
-        (when (> (match-beginning 0) start)
-          (push (cons (substring text start (match-beginning 0)) nil) segments))
-        (push (cons shown target) segments)
-        (setq start (match-end 0))))
+            (shown (or (match-string 2 text) (match-string 1 text) (match-string 3 text)))
+            (begin (match-beginning 0)) (end (match-end 0)))
+        ;; Revived's (?<![a-zA-Z0-9_@%:]): a bare link starts a word.
+        (if (and (match-beginning 3) (> begin 0)
+                 (string-match-p "[a-zA-Z0-9_@%:]" (substring text (1- begin) begin)))
+            (setq from (1+ begin))
+          (when (> begin start)
+            (push (cons (substring text start begin) nil) segments))
+          (push (cons shown target) segments)
+          (setq start end from end))))
     (when (< start (length text))
       (push (cons (substring text start) nil) segments))
     (nreverse segments)))
 
 (defun orgzly-ui-org-spans (text id field)
   "Render Org TEXT of note ID's FIELD as spans: emphasis and tappable links.
-A link's tap names the note, the field and the link's index, never its
-target, so Emacs opens what its own snapshot holds."
+A system link (web, mail, phone, message, map) opens on the device with
+the `uri.open' builtin; any other link's tap names the note, the field
+and the link's index, never its target, so Emacs opens what its own
+snapshot holds."
   (let ((index -1) (link (orgzly-design-color 'link (orgzly-ui-dark))))
     (cl-mapcan
      (lambda (segment)
        (if (null (cdr segment))
            (orgzly-ui--emphasis-spans (car segment))
-         (list (jetpacs-span (car segment) :underline t :color link
-                             :on-tap (orgzly-ui-action
-                                      "orgzly.link.open"
-                                      (list :id id :field field :link (cl-incf index)))))))
+         (let ((target (cdr segment)) (n (cl-incf index)))
+           (list (jetpacs-span (car segment) :underline t :color link
+                               :on-tap
+                               ;; Revived hands system links to the device's
+                               ;; own apps (EBP #208); the rest are Emacs's.
+                               (if (and (orgzly-ui-system-link-p target)
+                                        (jetpacs-uri-open-p target)
+                                        (jetpacs-builtin-advertised-p "uri.open"))
+                                   (jetpacs-uri-open target)
+                                 (orgzly-ui-action
+                                  "orgzly.link.open"
+                                  (list :id id :field field :link n))))))))
      (orgzly-ui-link-segments text))))
 
 (defun orgzly-ui-title-spans (entry)
