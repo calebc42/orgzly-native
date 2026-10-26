@@ -33,12 +33,19 @@ Closed later on 2026-10-25:
 - The period dialogs' hint follows the type wheel as it turns
   (`jetpacs.state_switch`), with no round trip.
 
+Closed on 2026-10-26: the overflow popup's position on the tablet (8dp
+more inset on sw600, as Revived's toolbar), checkable rows' radio buttons
+and check box at the row's end in the accent color with no highlight (EBP
+#204 `unchecked_icon`, design `check_at_end`/`check_color`), 24dp menu
+icons 8dp in with the label 8dp after (`icon_size`, `icon_start`,
+`icon_gap`), and the tags Clear button following the field's text live.
+
 Still open:
 
 - **Keep screen on.** Revived's note menu has a checkable Keep screen on;
   Orgzly Native has no such item (it needs a platform operation).
-- **Checkable menu rows.** Revived draws a radio button or check box at
-  the end of a checkable row; Jetpacs swaps the leading icon for a check.
+- **Checkable rows close Revived's menu?** SPEC 17.4 keeps a checkable
+  row's menu open; Revived's behaviour on a tap was not compared.
 - **Suggestions and Back.** Back while the tag suggestions are open
   leaves the note; Revived first closes the list.
 - **Import Org file.** Revived opens Android's document picker; EBP has no

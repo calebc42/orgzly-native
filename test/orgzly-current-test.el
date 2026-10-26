@@ -511,5 +511,25 @@ must not capture them, and saving keeps what they held."
         (should-not (member "oz-tags" (orgzly-ui-note-captures route))))
       (should (member "oz-tags" (orgzly-ui-note-captures route))))))
 
+(ert-deftest orgzly-current-metadata-rows-draw-radios-and-a-check-box ()
+  (let* ((orgzly-state-metadata-visibility 'selected) (orgzly-state-metadata-always-set nil)
+         (items (orgzly-ui--metadata-items)))
+    (should (equal (mapcar (lambda (i) (plist-get i :checked_icon)) items)
+                   '("radio_button_checked" "radio_button_checked" "check_box")))
+    (should (equal (mapcar (lambda (i) (plist-get i :unchecked_icon)) items)
+                   '("radio_button_unchecked" "radio_button_unchecked" "check_box_outline_blank")))
+    (should (equal (mapcar (lambda (i) (plist-get i :checked)) items) '(:json-false t :json-false)))))
+
+(ert-deftest orgzly-current-tags-clear-follows-the-field ()
+  "The Companion shows Clear while the tags field has text: no round trip."
+  (orgzly-test-with-snapshot
+    (let* ((route (list :kind 'note :id (alist-get 'id (car (orgzly-state-entries "gtd")))))
+           (orgzly-field-scope (orgzly-field-scope route))
+           (switch (orgzly-ui--tags-buttons (orgzly-field-scope route))))
+      (should (equal (plist-get switch :t) "jetpacs.state_switch"))
+      (should (equal (plist-get switch :source) (orgzly-field-id "oz-tags")))
+      (should (equal (plist-get switch :values) [""]))
+      (should (orgzly-test-find-nodes "icon_button" (plist-get switch :otherwise))))))
+
 (provide 'orgzly-current-test)
 ;;; orgzly-current-test.el ends here

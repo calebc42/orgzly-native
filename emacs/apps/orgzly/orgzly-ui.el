@@ -832,7 +832,16 @@ A timestamp inserted into the field puts the new text in the draft."
                                 (orgzly-state-entries nil)))
         #'string<))
 
-(defun orgzly-ui--tags-buttons (scope clear)
+(defun orgzly-ui--tags-buttons (scope)
+  "The Tags row's buttons for form SCOPE: the dropdown, and Clear with text.
+Revived shows Clear while the field holds text, so the Companion picks
+between the two rows from the field's live value, with no round trip."
+  (jetpacs-design-state-switch
+   (orgzly-field-id "oz-tags")
+   `(("" . ,(orgzly-ui--tags-row scope nil)))
+   :otherwise (orgzly-ui--tags-row scope t)))
+
+(defun orgzly-ui--tags-row (scope clear)
   "The Tags row's buttons for form SCOPE: the dropdown, and Clear if CLEAR.
 Revived's \"...\" opens the autocomplete dropdown of every known tag under
 the field; a picked tag goes into the field as a typed one would."
@@ -1303,7 +1312,7 @@ toolbar's Done saves everything at once."
                (when (orgzly-ui--metadata-shown-p 'tags (not (string-blank-p tags)))
                (orgzly-ui--meta-row
                 "label" (orgzly-ui--input 'value "oz-tags" tags "Tags" nil nil (orgzly-ui-all-tags))
-                (orgzly-ui--tags-buttons scope (not (string-blank-p tags)))
+                (orgzly-ui--tags-buttons scope)
                 "tags")))
              (when (orgzly-ui--metadata-shown-p 'state (not (string-empty-p (funcall value "state"))))
              (orgzly-ui--meta-row
@@ -1452,12 +1461,17 @@ Orgzly Native's items follow only while `orgzly-menu-extras' is non-nil."
 
 (defun orgzly-ui--metadata-items ()
   "Revived's Metadata submenu: Show all or Show selected, then Always show set."
-  (list (jetpacs-menu-item "Show all" (orgzly-ui-action "orgzly.note.metadata" '(:show "all"))
-                           :checked (if (eq orgzly-state-metadata-visibility 'all) t :json-false))
-        (jetpacs-menu-item "Show selected" (orgzly-ui-action "orgzly.note.metadata" '(:show "selected"))
-                           :checked (if (eq orgzly-state-metadata-visibility 'selected) t :json-false))
-        (jetpacs-menu-item "Always show set" (orgzly-ui-action "orgzly.note.metadata" '(:always-set t))
-                           :checked (if orgzly-state-metadata-always-set t :json-false))))
+  (let ((radio (lambda (label show)
+                 (jetpacs-menu-item label (orgzly-ui-action "orgzly.note.metadata" (list :show show))
+                                    :checked (if (equal (symbol-name orgzly-state-metadata-visibility) show)
+                                                 t :json-false)
+                                    :checked-icon "radio_button_checked"
+                                    :unchecked-icon "radio_button_unchecked"))))
+    (list (funcall radio "Show all" "all")
+          (funcall radio "Show selected" "selected")
+          (jetpacs-menu-item "Always show set" (orgzly-ui-action "orgzly.note.metadata" '(:always-set t))
+                             :checked (if orgzly-state-metadata-always-set t :json-false)
+                             :checked-icon "check_box" :unchecked-icon "check_box_outline_blank"))))
 
 (defun orgzly-ui--share-items (id)
   "Revived's Share submenu for note ID: the note as Org, its title, its content.
@@ -1472,11 +1486,13 @@ An empty part shares nothing, as Revived's does."
                                    :icon (cadr part))))
             (list (list "Share note" "subject" #'orgzly--note-org)
                   (list "Share title" "title" (lambda (e) (or (alist-get 'title e) "")))
-                  (list "Share content" "article" (lambda (e) (or (alist-get 'content e) "")))))))
+                  (list "Share content" "article_filled" (lambda (e) (or (alist-get 'content e) "")))))))
 
 (defun orgzly-ui--overflow (route)
   "The toolbar's overflow menu on ROUTE's screen."
-  (jetpacs-menu (orgzly-ui--overflow-items route) :icon "more_vert"))
+  (orgzly-design-overflow-scope
+   (orgzly-ui-dark) (jetpacs-window)
+   (jetpacs-menu (orgzly-ui--overflow-items route) :icon "more_vert")))
 
 (defun orgzly-ui--toolbar-actions (route)
   "The top app bar's trailing actions on ROUTE's screen, as Revived places them.

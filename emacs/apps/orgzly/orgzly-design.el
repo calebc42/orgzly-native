@@ -152,6 +152,31 @@ A string is a color, t a boolean, and a number a dimension."
   "A style from keyword PAIRS (:property value) with dimension or color values."
   (jetpacs-design-style (orgzly-design--pairs pairs)))
 
+(defun orgzly-design--menu-style (c edge-inset)
+  "Revived's popup menu style in colors C, EDGE-INSET dp from the window edge.
+It covers its button, on the menu surface with the popup window's shadow."
+  (jetpacs-design-style
+   (append (orgzly-design--pairs
+            (list :background_color (funcall c 'menu) :border_width 0
+                  :border_color "#00000000" :corner_radius 4
+                  :padding_vertical 8 :min_width 196
+                  :popup_edge_inset edge-inset :popup_offset_y 0.36
+                  :elevation 16))
+           `(("popup_overlap" . ,(jetpacs-design-boolean t))))))
+
+(defun orgzly-design-overflow-scope (dark window child)
+  "CHILD, a toolbar overflow menu, under WINDOW's popup placement in DARK.
+Revived's popup ends at its button, which sits 4dp from the window edge,
+8dp further in on a 600dp window (values-sw600dp toolbar padding)."
+  (let ((c (lambda (name) (orgzly-design-color name dark))))
+    (jetpacs-design-scope
+     nil
+     `(("orgzly.overflow.menu"
+        . ,(orgzly-design--menu-style c (if (orgzly-design-sw600-p window) 12 4))))
+     (list child)
+     :component-styles
+     (list (jetpacs-design-component-style "menu.container" '("orgzly.overflow.menu"))))))
+
 (defun orgzly-design-profile (dark)
   "Build Orgzly's immutable Foundation profile, using DARK when non-nil."
   (let* ((palette (if dark orgzly-design-dark orgzly-design-light))
@@ -192,16 +217,19 @@ A string is a color, t a boolean, and a number a dimension."
        ("orgzly.toolbar.action" . ,(orgzly-design--box :ripple_color (orgzly-design-ripple (funcall c 'strong)) :ripple_radius 20))
        ;; The overflow popup: it covers its button, 4dp from the edge, on the
        ;; menu surface; 48dp items with 16sp labels 16dp in.
-       ("orgzly.menu" . ,(jetpacs-design-style
-                          (append (orgzly-design--pairs
-                                   (list :background_color (funcall c 'menu) :border_width 0
-                                         :border_color "#00000000" :corner_radius 4
-                                         :padding_vertical 8 :min_width 196
-                                         :popup_edge_inset 4 :popup_offset_y 0.36
-                                         ;; The popup window's shadow, as the tags dropdown's.
-                                         :elevation 16))
-                                  `(("popup_overlap" . ,(jetpacs-design-boolean t))))))
-       ("orgzly.menu.item" . ,(orgzly-design--box :padding_horizontal 16 :min_height 48))
+       ("orgzly.menu" . ,(orgzly-design--menu-style c 4))
+       ;; AppCompat's rows: 24dp icons, the check box or radio button at the
+       ;; end in the accent color, and no highlight for a checked row.
+       ("orgzly.menu.item"
+        . ,(jetpacs-design-style
+            (orgzly-design--pairs
+             (list :padding_horizontal 16 :min_height 48 :icon_size 24
+                   ;; An icon row starts its icon 8dp in, its label 8dp after.
+                   :icon_start 8 :icon_gap 8
+                   :content_color (funcall c 'strong) :check_at_end t
+                   :check_color (funcall c 'link)))
+            :rules (list (jetpacs-design-rule
+                          "selected" `(("background_color" . ,(jetpacs-design-color (funcall c 'menu))))))))
        ("orgzly.t.menu" . ,(orgzly-design--text 16 (funcall c 'strong)
                                                 `("letter_spacing" . ,(jetpacs-design-dimension 0.5))))
        ;; Notebook card: item_book.xml, an elevated M3 card 12dp below the
