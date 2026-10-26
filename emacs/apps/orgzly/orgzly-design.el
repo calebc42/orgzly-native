@@ -197,7 +197,9 @@ A string is a color, t a boolean, and a number a dimension."
                                    (list :background_color (funcall c 'menu) :border_width 0
                                          :border_color "#00000000" :corner_radius 4
                                          :padding_vertical 8 :min_width 196
-                                         :popup_edge_inset 4 :popup_offset_y 0.36))
+                                         :popup_edge_inset 4 :popup_offset_y 0.36
+                                         ;; The popup window's shadow, as the tags dropdown's.
+                                         :elevation 16))
                                   `(("popup_overlap" . ,(jetpacs-design-boolean t))))))
        ("orgzly.menu.item" . ,(orgzly-design--box :padding_horizontal 16 :min_height 48))
        ("orgzly.t.menu" . ,(orgzly-design--text 16 (funcall c 'strong)

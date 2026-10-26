@@ -404,5 +404,112 @@ owner's teardown, removes it."
         (funcall on-conclude "submitted" '(:fields (:oz-dialog-name "alpha beta")) nil)
         (should (string-match-p "^#\\+FILETAGS: :alpha:beta:$" (orgzly-data-book-preface "gtd")))))))
 
+(defun orgzly-test-find-nodes (type node)
+  "Every node of TYPE in the tree NODE, depth first."
+  (let (found)
+    (cl-labels ((walk (n)
+                  (cond ((and (consp n) (keywordp (car n)))
+                         (when (equal (plist-get n :t) type) (push n found))
+                         (cl-loop for (_k v) on n by #'cddr do (walk v)))
+                        ((vectorp n) (mapc #'walk n))
+                        ((consp n) (mapc #'walk n)))))
+      (walk node))
+    (nreverse found)))
+
+(ert-deftest orgzly-current-period-hint-follows-the-type-wheel ()
+  (let* ((orgzly-state-dark nil)
+         (repeat (orgzly-ui-period-dialog (orgzly-ui-period-kind "repeater" "scheduled")
+                                          ".+" "1" "w" nil))
+         (switch (car (orgzly-test-find-nodes "jetpacs.state_switch" repeat))))
+    (should switch)
+    (should (equal (plist-get switch :source) "oz-period-type"))
+    (should (equal (plist-get switch :values) ["+" "++" ".+"]))
+    (should (= (length (plist-get switch :children)) 3)))
+  ;; A warning period has one type, no wheel to follow, and no hint.
+  (let ((orgzly-state-dark nil))
+    (should-not (orgzly-test-find-nodes
+                 "jetpacs.state_switch"
+                 (orgzly-ui-period-dialog (orgzly-ui-period-kind "delay" "deadline") "-" "1" "d" nil)))))
+
+(ert-deftest orgzly-current-tags-field-suggests-known-tags ()
+  (orgzly-test-with-snapshot
+    (let* ((input (car (orgzly-test-find-nodes
+                        "text_input" (orgzly-ui--input 'value "oz-tags" "" "Tags" nil nil
+                                                       (orgzly-ui-all-tags))))))
+      (should (equal (append (plist-get input :suggestions) nil) (orgzly-ui-all-tags)))
+      (should (orgzly-ui-all-tags)))
+    ;; Without known tags the member is absent, not empty.
+    (should-not (plist-get (car (orgzly-test-find-nodes
+                                 "text_input" (orgzly-ui--input 'value "oz-tags" "" "Tags")))
+                           :suggestions))))
+
+(ert-deftest orgzly-current-note-overflow-has-revived-submenus ()
+  (orgzly-test-with-snapshot
+    (let* ((id (alist-get 'id (car (orgzly-state-entries "gtd"))))
+           (route (list :kind 'note :id id))
+           (items (cl-letf (((symbol-function 'jetpacs-feature-advertised-p)
+                             (lambda (feature &rest _) (equal feature "menu.submenu"))))
+                    (orgzly-ui--overflow-items route)))
+           (row (lambda (label) (cl-find label items :key (lambda (i) (plist-get i :label))
+                                       :test #'equal))))
+      (should (equal (mapcar (lambda (i) (plist-get i :label)) (append (plist-get (funcall row "Clock") :items) nil))
+                     '("Clock in" "Clock out" "Clock cancel")))
+      (should (equal (mapcar (lambda (i) (plist-get i :label)) (append (plist-get (funcall row "Metadata") :items) nil))
+                     '("Show all" "Show selected" "Always show set")))
+      (should (equal (mapcar (lambda (i) (plist-get i :label)) (append (plist-get (funcall row "Share") :items) nil))
+                     '("Share note" "Share title" "Share content")))
+      (should-not (plist-member (funcall row "Clock") :on_tap)))
+    ;; Without the feature the rows dispatch, as before.
+    (let ((items (cl-letf (((symbol-function 'jetpacs-feature-advertised-p) #'ignore))
+                   (orgzly-ui--overflow-items
+                    (list :kind 'note :id (alist-get 'id (car (orgzly-state-entries "gtd"))))))))
+      (should (cl-every (lambda (i) (plist-get i :on_tap)) items)))))
+
+(ert-deftest orgzly-current-metadata-visibility-follows-revived ()
+  (let ((orgzly-selected-metadata '(tags state scheduled)))
+    (let ((orgzly-state-metadata-visibility 'all) (orgzly-state-metadata-always-set nil))
+      (should (orgzly-ui--metadata-shown-p 'deadline nil)))
+    (let ((orgzly-state-metadata-visibility 'selected) (orgzly-state-metadata-always-set nil))
+      (should (orgzly-ui--metadata-shown-p 'tags nil))
+      (should-not (orgzly-ui--metadata-shown-p 'deadline t)))
+    (let ((orgzly-state-metadata-visibility 'selected) (orgzly-state-metadata-always-set t))
+      (should (orgzly-ui--metadata-shown-p 'deadline t))
+      (should-not (orgzly-ui--metadata-shown-p 'priority nil))))
+  (let ((orgzly-state-metadata-visibility 'all) (orgzly-state-metadata-always-set t))
+    (cl-letf (((symbol-function 'orgzly--later) #'ignore))
+      (should (eq (orgzly--on-note-metadata '(:show "selected") nil) 'accepted))
+      (should (eq orgzly-state-metadata-visibility 'selected))
+      (orgzly--on-note-metadata '(:always-set t) nil)
+      (should-not orgzly-state-metadata-always-set)
+      (should (eq (orgzly--on-note-metadata '(:show "bogus") nil) 'rejected)))))
+
+(ert-deftest orgzly-current-clock-in-on-viewed-content-resets-nothing ()
+  "Content shown as text has no field to reset; the draft carries the clock."
+  (orgzly-test-with-snapshot
+    (let* ((entry (car (orgzly-state-entries "gtd")))
+           (route (list :kind 'note :id (alist-get 'id entry)))
+           (scope (orgzly-field-scope route))
+           (orgzly-state-editing nil) (orgzly-state-draft nil) (orgzly--reset-fields nil))
+      (should (eq (orgzly--on-note-content-op
+                   (list :scope scope :op "clock-in" :id (alist-get 'id entry)) nil)
+                  'accepted))
+      (should-not orgzly--reset-fields)
+      (should (string-match-p "CLOCK: \\[" (plist-get orgzly-state-draft :content))))))
+
+(ert-deftest orgzly-current-hidden-fields-are-not-captured ()
+  "Show selected or a folded section takes fields off the screen; Done
+must not capture them, and saving keeps what they held."
+  (orgzly-test-with-snapshot
+    (let* ((entry (cl-find-if (lambda (e) (null (alist-get 'tags e))) (orgzly-state-entries "gtd")))
+           (route (list :kind 'note :id (alist-get 'id entry))))
+      (let ((orgzly-state-metadata-visibility 'selected)
+            (orgzly-selected-metadata '(state scheduled))
+            (orgzly-state-metadata-always-set t))
+        (should-not (member "oz-tags" (orgzly-ui-note-captures route)))
+        (should-not (member "oz-prop-name" (orgzly-ui-note-captures route))))
+      (let ((orgzly-state-note-folds '(metadata)))
+        (should-not (member "oz-tags" (orgzly-ui-note-captures route))))
+      (should (member "oz-tags" (orgzly-ui-note-captures route))))))
+
 (provide 'orgzly-current-test)
 ;;; orgzly-current-test.el ends here

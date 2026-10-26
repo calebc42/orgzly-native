@@ -35,6 +35,18 @@ which also carries the field's captured :text.")
 Revived shows title and content as text until tapped.")
 (defvar orgzly-state-note-folds nil
   "Collapsed note sections: a list of the symbols `metadata' and `content'.")
+(defvar orgzly-state-metadata-visibility 'all
+  "Which metadata rows the note shows, as Revived's Metadata submenu sets it:
+`all', or `selected' for those in `orgzly-selected-metadata'.")
+(defvar orgzly-state-metadata-always-set t
+  "Non-nil shows a metadata row that has a value even when not selected.")
+(defcustom orgzly-selected-metadata '(tags state scheduled)
+  "The metadata rows Revived's \"Show selected\" keeps, its default set.
+Symbols among `tags', `state', `priority', `scheduled', `deadline' and
+`properties'."
+  :type '(set (const tags) (const state) (const priority) (const scheduled)
+              (const deadline) (const properties))
+  :group 'orgzly)
 (defconst orgzly-state-page-size 40 "Maximum note rows emitted per screen.")
 (defcustom orgzly-saved-searches
   '(("Agenda" . ".it.done ad.7") ("Next 3 days" . ".it.done s.ge.today ad.3")

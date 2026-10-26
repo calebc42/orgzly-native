@@ -11,6 +11,8 @@
 (defvar orgzly-field-scope nil
   "Dynamic identity namespace of the current form, shared by its capture handler.")
 
+(declare-function orgzly--note-org "orgzly" (entry))
+
 (defun orgzly-field-scope (route)
   "Return the stable form namespace for ROUTE and its revision-bound identity."
   (jetpacs-wire-id (symbol-name (plist-get route :kind))
@@ -711,17 +713,19 @@ TextView-shaped field."
            (jetpacs-design-component-style "text-field.text" (list (concat prefix ".text")))
            (jetpacs-design-component-style "text-field.placeholder" (list (concat prefix ".hint")))))))
 
-(defun orgzly-ui--input (kind id value hint &optional multiline focus)
+(defun orgzly-ui--input (kind id value hint &optional multiline focus suggestions)
   "A chromeless KIND field ID holding VALUE with placeholder HINT.
 MULTILINE lets it grow over as many lines as its text takes; FOCUS
-focuses it, opening the keyboard."
+focuses it, opening the keyboard.  SUGGESTIONS, words, complete the word
+being typed, as Revived's tags field does."
   (orgzly-ui--field-scope
    kind
    (jetpacs-text-input (orgzly-field-id id) :value (or value "") :hint hint
                        :autofocus (and focus t)
                        :single-line (if multiline :json-false t)
                        :min-lines 1 :max-lines (if multiline 1000 1)
-                       :max-length (if multiline 64000 512))))
+                       :max-length (if multiline 64000 512)
+                       :suggestions (and suggestions (seq-take suggestions 1000)))))
 
 (defun orgzly-ui--meta-row (icon body &optional trailing key)
   "One metadata row: ICON, BODY and an optional TRAILING button, keyed KEY."
@@ -773,12 +777,25 @@ KIND is `title' or `content', which share their metrics with the fields."
            :weight 1)))
    :key (concat field "-view")))
 
+(defun orgzly-ui-note-field-shown-p (kind entry)
+  "Whether the note form shows metadata KIND's field for ENTRY.
+KIND is `tags' or `properties'; folding the section or Revived's
+\"Show selected\" can take either off the screen."
+  (and (not (memq 'metadata orgzly-state-note-folds))
+       (orgzly-ui--metadata-shown-p
+        kind (pcase kind
+               ('tags (not (string-blank-p (orgzly-ui-note-tags entry))))
+               ('properties (and (alist-get 'properties entry) t))))))
+
 (defun orgzly-ui-note-captures (route)
   "The fields Done captures on note ROUTE: those shown as editable."
-  (let ((orgzly-field-scope (orgzly-field-scope route)))
+  (let* ((orgzly-field-scope (orgzly-field-scope route))
+         (id (plist-get route :id))
+         (entry (and id (ignore-errors (orgzly-state-resolve id t)))))
     (append (when (or (eq (plist-get route :kind) 'new-note) (orgzly-ui-note-editing-p "title"))
               '("oz-title"))
-            '("oz-tags" "oz-prop-name" "oz-prop-value")
+            (when (orgzly-ui-note-field-shown-p 'tags entry) '("oz-tags"))
+            (when (orgzly-ui-note-field-shown-p 'properties entry) '("oz-prop-name" "oz-prop-value"))
             (when (orgzly-ui-note-editing-p "content") '("oz-content")))))
 
 (defun orgzly-ui-note-value (field entry)
@@ -1046,9 +1063,15 @@ submits, capturing `oz-period-type', `oz-period-value' and
                      (jetpacs-spacer :weight 1))))
        :height 180)
       (jetpacs-spacer :height 16)
-      (if (plist-get kind :hints)
-          (funcall hint (nth (or (cl-position type types :test #'equal) 0) (plist-get kind :hints)))
-        (jetpacs-spacer :height 0))
+      (cond
+       ((null (plist-get kind :hints)) (jetpacs-spacer :height 0))
+       ;; The hint follows the type wheel as it turns, as Revived's does.
+       ((cdr types)
+        (jetpacs-design-state-switch
+         "oz-period-type"
+         (cl-mapcar (lambda (ty text) (cons ty (funcall hint text)))
+                    types (plist-get kind :hints))))
+       (t (funcall hint (car (plist-get kind :hints)))))
       (jetpacs-spacer :height 12)
       (jetpacs-with-attrs
        (jetpacs-row
@@ -1273,34 +1296,42 @@ toolbar's Done saves everything at once."
                (orgzly-ui--section-header "info" "metadata" (memq 'metadata folds)))
          (unless (memq 'metadata folds)
            (append
-            (list
+            (delq
+             nil
+             (list
              (let ((tags (orgzly-ui-note-tags entry)))
+               (when (orgzly-ui--metadata-shown-p 'tags (not (string-blank-p tags)))
                (orgzly-ui--meta-row
-                "label" (orgzly-ui--input 'value "oz-tags" tags "Tags")
+                "label" (orgzly-ui--input 'value "oz-tags" tags "Tags" nil nil (orgzly-ui-all-tags))
                 (orgzly-ui--tags-buttons scope (not (string-blank-p tags)))
-                "tags"))
+                "tags")))
+             (when (orgzly-ui--metadata-shown-p 'state (not (string-empty-p (funcall value "state"))))
              (orgzly-ui--meta-row
               "flag_filled" (orgzly-ui--meta-value "state" (funcall value "state") "State" scope)
               (unless (string-empty-p (funcall value "state")) (funcall remove "state" "Clear state"))
-              "state")
+              "state"))
+             (when (orgzly-ui--metadata-shown-p 'priority (not (string-empty-p (funcall value "priority"))))
              (orgzly-ui--meta-row
               "star_border" (orgzly-ui--meta-value "priority" (funcall value "priority") "Priority" scope)
               (unless (string-empty-p (funcall value "priority")) (funcall remove "priority" "Clear priority"))
-              "priority")
+              "priority"))
+             (when (orgzly-ui--metadata-shown-p 'scheduled (not (string-empty-p (funcall value "scheduled"))))
              (orgzly-ui--meta-row
               "today_filled" (orgzly-ui--meta-value "scheduled" (orgzly-ui--shown-time (funcall value "scheduled"))
                                                     "Scheduled time" scope (funcall value "scheduled"))
               (unless (string-empty-p (funcall value "scheduled")) (funcall remove "scheduled" "Clear scheduled time"))
-              "scheduled")
+              "scheduled"))
+             (when (orgzly-ui--metadata-shown-p 'deadline (not (string-empty-p (funcall value "deadline"))))
              (orgzly-ui--meta-row
               "alarm" (orgzly-ui--meta-value "deadline" (orgzly-ui--shown-time (funcall value "deadline"))
                                              "Deadline time" scope (funcall value "deadline"))
               (unless (string-empty-p (funcall value "deadline")) (funcall remove "deadline" "Clear deadline time"))
-              "deadline"))
+              "deadline"))))
             (when-let* ((closed (alist-get 'closed entry)))
               (list (orgzly-ui--meta-row "check_circle_outline"
                                          (orgzly-ui-styled-text "orgzly.t.value" (orgzly-ui--time closed))
                                          nil "closed")))
+            (when (orgzly-ui--metadata-shown-p 'properties (alist-get 'properties entry))
             (cl-loop for (name . val) in (alist-get 'properties entry) for n from 0
                      collect (orgzly-ui--meta-row
                               "abc" (jetpacs-row (jetpacs-with-attrs (orgzly-ui-styled-text "orgzly.t.value" name)
@@ -1309,7 +1340,8 @@ toolbar's Done saves everything at once."
                                                  (jetpacs-with-attrs (orgzly-ui-styled-text "orgzly.t.value" val)
                                                                      :weight 1)
                                                  :align "center")
-                              nil (format "prop-%d" n)))
+                              nil (format "prop-%d" n))))
+            (when (orgzly-ui--metadata-shown-p 'properties (alist-get 'properties entry))
             (list (orgzly-ui--meta-row
                    "abc" (jetpacs-row (jetpacs-with-attrs
                                        (orgzly-ui--input 'value "oz-prop-name" "" "Property name") :weight 1)
@@ -1317,15 +1349,23 @@ toolbar's Done saves everything at once."
                                       (jetpacs-with-attrs
                                        (orgzly-ui--input 'value "oz-prop-value" "" "Property value") :weight 1)
                                       :align "center")
-                   nil "prop-new"))))
+                   nil "prop-new")))))
          (list (orgzly-ui--note-divider)
                (orgzly-ui--section-header "notes" "content" (memq 'content folds)))
          (unless (memq 'content folds)
            (list (if (or (null entry) (orgzly-ui-note-editing-p "content"))
                      (orgzly-ui--input 'content "oz-content" (orgzly-ui-note-text "content" entry) "Content" t)
-                   (orgzly-ui--note-text 'content "content" (or (alist-get 'content entry) "")
+                   (orgzly-ui--note-text 'content "content" (or (orgzly-ui-note-text "content" entry) "")
                                          "Content" id))))
          (list (orgzly-ui--note-divider)))))))
+
+(defun orgzly-ui--metadata-shown-p (kind set)
+  "Whether the note shows metadata row KIND, which has a value when SET.
+Revived's Metadata submenu: everything, or the selected rows plus, while
+\"Always show set\" is on, every row with a value."
+  (or (eq orgzly-state-metadata-visibility 'all)
+      (memq kind orgzly-selected-metadata)
+      (and orgzly-state-metadata-always-set set t)))
 
 (defun orgzly-ui-book-form (route)
   "Build notebook metadata form for ROUTE, with explicit destructive confirmation."
@@ -1366,18 +1406,35 @@ Orgzly Native's items follow only while `orgzly-menu-extras' is non-nil."
                  (funcall item "Tags" "orgzly.book.tags" (list :id (alist-get 'id book)))))
          common))
        ((or 'note 'new-note)
-        (append
-         (list (funcall item "Clock" "orgzly.note.clock" (append (list :scope scope) (and id (list :id id)))
-                        nil content)
-               (funcall item "Metadata" "orgzly.note.section" '(:section "metadata")))
-         (when (eq kind 'note)
-           (list (funcall item "Delete" "orgzly.note.operate" (list :id id :operation "delete")
-                          "Delete this note and its children?")
-                 (funcall item "Share" "orgzly.note.share" (list :id id))))
-         common
-         (list (funcall item "Sort note" "orgzly.note.content-op"
-                        (append (list :scope scope :op "sort") (and id (list :id id)))
-                        nil content))))
+        (let ((submenus (jetpacs-feature-advertised-p "menu.submenu" :app))
+              (clock-op (lambda (label op icon)
+                          (jetpacs-menu-item label (orgzly-ui-action
+                                                    "orgzly.note.content-op"
+                                                    (append (list :scope scope :op op) (and id (list :id id)))
+                                                    nil content)
+                                             :icon icon))))
+          (append
+           (list (if submenus
+                     (jetpacs-menu-item "Clock" nil :items
+                                        (list (funcall clock-op "Clock in" "clock-in" "hourglass_top")
+                                              (funcall clock-op "Clock out" "clock-out" "hourglass_bottom")
+                                              (funcall clock-op "Clock cancel" "clock-cancel"
+                                                       "hourglass_disabled")))
+                   (funcall item "Clock" "orgzly.note.clock" (append (list :scope scope) (and id (list :id id)))
+                            nil content))
+                 (if submenus
+                     (jetpacs-menu-item "Metadata" nil :items (orgzly-ui--metadata-items))
+                   (funcall item "Metadata" "orgzly.note.section" '(:section "metadata"))))
+           (when (eq kind 'note)
+             (list (funcall item "Delete" "orgzly.note.operate" (list :id id :operation "delete")
+                            "Delete this note and its children?")
+                   (if submenus
+                       (jetpacs-menu-item "Share" nil :items (orgzly-ui--share-items id))
+                     (funcall item "Share" "orgzly.note.share" (list :id id)))))
+           common
+           (list (funcall item "Sort note" "orgzly.note.content-op"
+                          (append (list :scope scope :op "sort") (and id (list :id id)))
+                          nil content)))))
        (_ common))
      (when orgzly-menu-extras
        (append
@@ -1392,6 +1449,30 @@ Orgzly Native's items follow only while `orgzly-menu-extras' is non-nil."
               ;; Orgzly owns its whole chrome, so the way back to Jetpacs lives here.
               (jetpacs-menu-item "Jetpacs apps"
                                  (jetpacs-shell-open-surface-action "app:jetpacs.app-store"))))))))
+
+(defun orgzly-ui--metadata-items ()
+  "Revived's Metadata submenu: Show all or Show selected, then Always show set."
+  (list (jetpacs-menu-item "Show all" (orgzly-ui-action "orgzly.note.metadata" '(:show "all"))
+                           :checked (if (eq orgzly-state-metadata-visibility 'all) t :json-false))
+        (jetpacs-menu-item "Show selected" (orgzly-ui-action "orgzly.note.metadata" '(:show "selected"))
+                           :checked (if (eq orgzly-state-metadata-visibility 'selected) t :json-false))
+        (jetpacs-menu-item "Always show set" (orgzly-ui-action "orgzly.note.metadata" '(:always-set t))
+                           :checked (if orgzly-state-metadata-always-set t :json-false))))
+
+(defun orgzly-ui--share-items (id)
+  "Revived's Share submenu for note ID: the note as Org, its title, its content.
+An empty part shares nothing, as Revived's does."
+  (let ((entry (ignore-errors (orgzly-state-resolve id t))))
+    (mapcar (lambda (part)
+              (let ((text (and entry (funcall (nth 2 part) entry))))
+                (jetpacs-menu-item (car part)
+                                   (if (and text (not (string-empty-p text)))
+                                       (jetpacs-share text)
+                                     (orgzly-ui-action "orgzly.refresh"))
+                                   :icon (cadr part))))
+            (list (list "Share note" "subject" #'orgzly--note-org)
+                  (list "Share title" "title" (lambda (e) (or (alist-get 'title e) "")))
+                  (list "Share content" "article" (lambda (e) (or (alist-get 'content e) "")))))))
 
 (defun orgzly-ui--overflow (route)
   "The toolbar's overflow menu on ROUTE's screen."

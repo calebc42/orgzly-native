@@ -226,7 +226,10 @@ Anything folded unfolds everything; otherwise every foldable note folds."
             (title (or (orgzly--field-maybe params "oz-title") (orgzly-ui-note-text "title" entry) ""))
             (state (orgzly--note-input params "state" entry))
             (priority (orgzly--note-input params "priority" entry))
-            (tags (orgzly--field params "oz-tags"))
+            ;; A tags field off the screen keeps the note's tags.
+            (tags (if (orgzly-ui-note-field-shown-p 'tags entry)
+                      (orgzly--field params "oz-tags")
+                    (orgzly-ui-note-tags entry)))
             (content (let ((v (plist-get (plist-get params :fields)
                                          (intern (concat ":" (orgzly-field-id "oz-content"))))))
                        (if (and (stringp v) (<= (string-bytes v) 64000)) v
@@ -344,6 +347,21 @@ Fields in `orgzly--reset-fields' drop their typed drafts for the new value."
       (setq orgzly-state-note-folds
             (if (memq section orgzly-state-note-folds) (delq section orgzly-state-note-folds)
               (cons section orgzly-state-note-folds)))
+      (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))
+      'accepted)))
+
+(defun orgzly--on-note-metadata (args _params)
+  "Set Revived's metadata visibility from ARGS.
+`:show' is all or selected; `:always-set' toggles showing every row that
+has a value."
+  (let ((show (plist-get args :show)))
+    (cond
+     ((member show '("all" "selected"))
+      (setq orgzly-state-metadata-visibility (intern show)))
+     ((plist-get args :always-set)
+      (setq orgzly-state-metadata-always-set (not orgzly-state-metadata-always-set)))
+     (t (setq show 'rejected)))
+    (if (eq show 'rejected) 'rejected
       (orgzly--later (lambda () (jetpacs-shell-push "orgzly")))
       'accepted)))
 
@@ -890,7 +908,9 @@ the result lands in the draft until Done saves it."
     (if (not (and (stringp scope) op)) 'rejected
       (let ((text (or (orgzly--field-maybe params "oz-content")
                       (orgzly-ui-note-text "content" entry) "")))
-        (setq orgzly--reset-fields '("oz-content"))
+        ;; Only a field the screen shows can be reset; content in view mode
+        ;; shows the draft as text instead.
+        (setq orgzly--reset-fields (and (orgzly-ui-note-editing-p "content") '("oz-content")))
         (orgzly--draft-put scope "content"
                            (if (eq op 'sort)
                                (string-join (sort (split-string text "\n") #'string<) "\n")
@@ -1031,6 +1051,7 @@ Revived opens Android's document picker; this lists the Org files of
     (jetpacs-defaction "orgzly.note.child" #'orgzly--on-note-child :doc "Open a child-note form under the current note" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.fold" #'orgzly--on-fold :doc "Toggle the current outline note's descendants and content" :args '((:name id :type "ref" :required t)))
     (jetpacs-defaction "orgzly.note.section" #'orgzly--on-note-section :doc "Fold or unfold the note screen's metadata or content" :args '((:name section :type "enum" :required t)))
+    (jetpacs-defaction "orgzly.note.metadata" #'orgzly--on-note-metadata :doc "Show all or selected metadata rows, or toggle always showing set ones" :args '((:name show :type "enum") (:name always-set :type "boolean")))
     (jetpacs-defaction "orgzly.note.edit" #'orgzly--on-note-edit :doc "Edit the open note's title or content in place" :args '((:name field :type "enum" :required t) (:name scope :type "string" :required t)))
     (jetpacs-defaction "orgzly.note.clear" #'orgzly--on-note-clear :doc "Clear a picked value of the open note" :args '((:name field :type "enum" :required t) (:name scope :type "string" :required t)))
     (jetpacs-defaction "orgzly.note.tag" #'orgzly--on-note-tag :doc "Put a known tag into the open note's Tags field" :args '((:name scope :type "string" :required t) (:name tag :type "string" :required t)))
