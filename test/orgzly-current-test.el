@@ -320,7 +320,7 @@ a file-level ID opens the notebook, and a link naming nothing is refused."
             (should (eq 'accepted (orgzly--on-link-open (list :id id :field "content" :link 0) nil)))
             (should (equal opened (list note t)))
             (should (eq 'accepted (orgzly--on-link-open (list :id id :field "content" :link 1) nil)))
-            (should (equal opened '((:kind book :book "ref") t)))
+            (should (equal opened '((:kind book :book "ref") nil)))
             (should (eq 'rejected (orgzly--on-link-open (list :id id :field "content" :link 2) nil)))
             (should (string-match-p "No such link target" (car toasts)))))))))
 

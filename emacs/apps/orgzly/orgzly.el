@@ -559,7 +559,11 @@ note or notebook it names, and one naming nothing says so, as Revived's
          (let ((route (orgzly-link-route target entry)))
            (unless route (error "No such link target: %s" target))
            (setq orgzly-state-draft nil orgzly-state-editing nil)
-           (orgzly--open route t)
+           ;; A note opens over the current screen.  A notebook is a
+           ;; drawer destination: the stack holds one outline screen, whose
+           ;; data document follows `orgzly-state-outline', so it replaces
+           ;; the stack as picking it from the drawer does.
+           (orgzly--open route (eq (plist-get route :kind) 'note))
            'accepted)))))))
 
 (defun orgzly--on-fold-all (_args _params)
