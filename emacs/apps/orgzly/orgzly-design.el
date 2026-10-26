@@ -433,6 +433,10 @@ Revived's popup ends at its button, which sits 4dp from the window edge,
                                                     :background_color (funcall c 'pill)))
        ("orgzly.fold" . ,(orgzly-design--box :min_width 0 :min_height 0 :padding_top 5))
        ;; FAB: 56dp, 16dp corners, 16dp from the edges.
+       ;; Revived's note popup buttons: Material 3 filled tonal icon
+       ;; buttons, the secondary container with its on-color glyph.
+       ("orgzly.popup.button" . ,(orgzly-design--box :background_color (funcall c 'pill)
+                                                      :content_color (funcall c 'on-pill)))
        ("orgzly.fab" . ,(orgzly-design--box :width 56 :height 56 :corner_radius 16 :elevation 6
                                             :ripple_color (orgzly-design-ripple (funcall c 'strong))
                                             :background_color (funcall c 'fab)
@@ -607,6 +611,7 @@ Revived's popup ends at its button, which sits 4dp from the window edge,
                                                   . ,(jetpacs-design-color (funcall c 'on-pill-off)))))))))
      :component-styles
      '(("chrome.drawer" . ("orgzly.drawer.sheet"))
+       ("swipe.popup-button" . ("orgzly.popup.button"))
        ("picker.container" . ("orgzly.ts.picker"))
        ("picker.label" . ("orgzly.t.ts-picker"))
        ("menu.trigger" . ("orgzly.overflow.icon"))

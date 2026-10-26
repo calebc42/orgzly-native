@@ -265,7 +265,7 @@ notebook, which the row's tap already does."
          (orgzly-ui--swipe-side
           `(("Schedule" "today" "orgzly.note.plan" (:id ,id :field "scheduled"))
             ("Deadline" "alarm" "orgzly.note.plan" (:id ,id :field "deadline"))
-            ("State" "flag" "orgzly.note.state" (:id ,id))
+            ("State" "flag_filled" "orgzly.note.state" (:id ,id))
             ("Done" "check_circle_outline" "orgzly.note.operate" (:id ,id :operation "toggle")))))
    (unless query
      (list :swipe-end
