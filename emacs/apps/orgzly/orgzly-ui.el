@@ -753,9 +753,11 @@ mirror, so Done reads the draft the mirror keeps, never a capture."
                            :min-lines 1 :max-lines 1000
                            :autofocus (and focus t)))
      :component-styles
+     ;; The editor's own typography is code; the field's is the body font.
      (list (jetpacs-design-component-style "editor.chromeless" (list (concat prefix ".box")))
-           (jetpacs-design-component-style "editor.text" (list (concat prefix ".text")))
-           (jetpacs-design-component-style "editor.placeholder" (list (concat prefix ".hint")))))))
+           (jetpacs-design-component-style "editor.text" (list "typography.body" (concat prefix ".text")))
+           (jetpacs-design-component-style "editor.placeholder"
+                                           (list "typography.body" (concat prefix ".hint")))))))
 
 (defun orgzly-ui--meta-row (icon body &optional trailing key)
   "One metadata row: ICON, BODY and an optional TRAILING button, keyed KEY."

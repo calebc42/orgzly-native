@@ -626,9 +626,14 @@ each buffer for state cycling."
     (org-todo (if (or (null state) (string-empty-p state)) 'none state))))
 
 (defun orgzly-data-set-priority (ref priority)
-  "Set REF's priority to PRIORITY (a letter string, or nil to remove)."
+  "Set REF's priority to PRIORITY (a letter string, or nil to remove).
+Removing from a heading that has none is a no-op: Org signals there."
   (orgzly-data--with-ref ref
-    (org-priority (if priority (string-to-char priority) 'remove))))
+    (cond (priority (org-priority (string-to-char priority)))
+          ((string-match-p org-priority-regexp
+                           (buffer-substring-no-properties (line-beginning-position)
+                                                           (line-end-position)))
+           (org-priority 'remove)))))
 
 (defun orgzly-data-set-tags (ref tags)
   "Set REF's own tags to TAGS (a list of strings)."

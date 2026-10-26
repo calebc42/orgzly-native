@@ -721,3 +721,26 @@ the view read what the device shows; another document is ignored."
     (should (equal orgzly-state-draft '(:scope "form" :content "typed body")))
     (orgzly--on-edit-change nil (orgzly-ui-content-document "form") "x" nil)
     (should (equal (plist-get orgzly-state-draft :content) "typed body"))))
+
+(ert-deftest orgzly-current-save-keeps-a-note-without-priority ()
+  "Saving a note that has no priority, with none picked, must not ask Org
+to remove a cookie that is not there."
+  (orgzly-test-with-snapshot
+    (let* ((entry (cl-find-if (lambda (e) (null (alist-get 'priority e)))
+                              (orgzly-state-entries "gtd")))
+           (id (alist-get 'id entry))
+           (orgzly-field-scope (orgzly-field-scope (list :kind 'note :id id)))
+           (fields (list :fields
+                         (cl-loop for (key value) on (list :oz-title "Kept title" :oz-tags ""
+                                                           :oz-priority "" :oz-state ""
+                                                           :oz-scheduled "" :oz-deadline "")
+                                  by #'cddr
+                                  append (list (intern (concat ":" (orgzly-field-id (substring (symbol-name key) 1))))
+                                               value)))))
+      (should entry)
+      (should (eq 'accepted (orgzly--on-note-save (list :id id) fields)))
+      ;; The save refreshed the snapshot, so the note is found by its title.
+      (let ((saved (cl-find "Kept title" (orgzly-state-entries "gtd")
+                            :key (lambda (e) (alist-get 'title e)) :test #'equal)))
+        (should saved)
+        (should (null (alist-get 'priority saved)))))))
