@@ -533,3 +533,79 @@ must not capture them, and saving keeps what they held."
 
 (provide 'orgzly-current-test)
 ;;; orgzly-current-test.el ends here
+
+;;; Device colors (SPEC 20.1.3, amendment #205)
+
+(defconst orgzly-test-scheme
+  '(:primary "#b4c5ff" :on_primary "#1a2d60" :secondary "#c1c5dd"
+    :on_secondary "#2b3042" :surface "#121318" :on_surface "#e3e2e9"
+    :outline "#8e9099" :error "#ffb4ab" :on_error "#690005"
+    :background "#121318" :on_background "#e3e2e9"
+    :success "#7fb77e" :warning "#e0b44c"
+    :on_surface_variant "#c9cad4" :surface_container_low "#1a1b20"
+    :surface_container "#1e1f25" :surface_container_high "#282a2f"
+    :surface_container_lowest "#0c0e12" :primary_container "#7a90c8"
+    :on_primary_container "#000000" :secondary_container "#8a90a5"
+    :on_secondary_container "#000000")
+  "The phone's dark scheme as a Material Companion reports it.")
+
+(ert-deftest orgzly-design-derives-the-palette-from-the-device ()
+  "Each color is the Material role Revived draws it with, a composite at
+Android's alpha, or the fixed resource; no report keeps the measured palette."
+  (should (equal (orgzly-design-blend "#FFFFFF" 0.5 "#000000") "#808080"))
+  (let ((orgzly-design--palettes nil) (orgzly-design--profiles nil))
+    (cl-letf (((symbol-function 'jetpacs-colors)
+               (lambda () (list :polarity "dark" :light orgzly-test-scheme
+                                :dark orgzly-test-scheme))))
+      (should (equal (orgzly-design-color 'container t) "#1A1B20"))
+      (should (equal (orgzly-design-color 'menu t) "#1E1F25"))
+      (should (equal (orgzly-design-color 'dialog t) "#282A2F"))
+      (should (equal (orgzly-design-color 'fab t) "#7A90C8"))
+      (should (equal (orgzly-design-color 'link t) "#B4C5FF"))
+      (should (equal (orgzly-design-color 'guide t)
+                     (orgzly-design-blend "#FFFFFF" 0.12 "#121318")))
+      (should (equal (orgzly-design-color 'dim t)
+                     (orgzly-design-blend "#C9CAD4" 0.45 "#121318")))
+      (should (equal (orgzly-design-color 'todo t) "#EF9A9A"))
+      (should (equal (cdr (assoc "on_surface" (orgzly-design-roles t))) "#C9CAD4"))
+      (should (equal (cdr (assoc "outline" (orgzly-design-roles t)))
+                     (orgzly-design-color 'guide t)))
+      (should (equal (cdr (assoc "error" (orgzly-design-roles t))) "#EF9A9A"))
+      (should (equal (plist-get (cdr (assoc "primary"
+                                            (plist-get (orgzly-design-current-profile t)
+                                                       :theme-roles)))
+                                :value)
+                     "#B4C5FF")))
+    ;; A Companion without Material's vocabulary: the standard roles
+    ;; land, the rest keep the measured colors.
+    (cl-letf (((symbol-function 'jetpacs-colors)
+               (lambda () (list :polarity "light"
+                                :light '(:primary "#396286" :on_primary "#ffffff"
+                                         :secondary "#585e71" :on_secondary "#ffffff"
+                                         :surface "#f8f9fe" :on_surface "#2d333a"
+                                         :outline "#74777f")
+                                :dark orgzly-test-scheme))))
+      (should (equal (orgzly-design-color 'link nil) "#396286"))
+      (should (equal (orgzly-design-color 'container nil) "#F1F4FA"))
+      (should (equal (orgzly-design-color 'text nil) "#5A6067")))
+    ;; No report: the measured palettes, byte for byte.
+    (cl-letf (((symbol-function 'jetpacs-colors) #'ignore))
+      (should (equal (orgzly-design-color 'container t) "#1A1B20"))
+      (should (equal (orgzly-design-roles nil) orgzly-design-light)))))
+
+(ert-deftest orgzly-follows-the-device-appearance-until-chosen ()
+  "The preset follows the reported polarity; a toggle makes it the user's."
+  (let ((orgzly-state-dark t) (orgzly-state-theme-chosen nil))
+    (cl-letf (((symbol-function 'jetpacs-colors) #'ignore))
+      (orgzly--follow-device)
+      (should orgzly-state-dark))
+    (cl-letf (((symbol-function 'jetpacs-colors)
+               (lambda () '(:polarity "light" :light nil :dark nil)))
+              ((symbol-function 'orgzly--later) #'ignore))
+      (orgzly--follow-device)
+      (should-not orgzly-state-dark)
+      (orgzly--on-theme nil nil)
+      (should orgzly-state-dark)
+      (should orgzly-state-theme-chosen)
+      (orgzly--on-colors-changed nil nil)
+      (should orgzly-state-dark))))

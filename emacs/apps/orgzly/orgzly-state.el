@@ -15,7 +15,11 @@
   "The notebook whose outline screen is on the stack, or nil.
 Its visible rows are the surface data document (SPEC 13.8.5).")
 (defvar orgzly-state-query "" "The active bounded dotted search query.")
-(defvar orgzly-state-dark t "Non-nil selects the dark Orgzly preset.")
+(defvar orgzly-state-dark t
+  "Non-nil selects the dark Orgzly preset.
+Follows the device's appearance (SPEC 20.1.3) until the user picks one.")
+(defvar orgzly-state-theme-chosen nil
+  "Non-nil once the user toggled the theme; nil follows the device.")
 (defvar orgzly-state-page 0 "Zero-based page in the active outline or search.")
 (defvar orgzly-state-draft nil
   "The open note's picked values, saved by Done.

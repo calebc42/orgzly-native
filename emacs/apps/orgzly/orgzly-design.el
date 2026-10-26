@@ -12,6 +12,7 @@
 (require 'cl-lib)
 (require 'jetpacs-components)
 (require 'jetpacs-design-profiles)
+(require 'jetpacs-surfaces)              ; jetpacs-colors (SPEC 20.1.3)
 
 (defconst orgzly-design-dark
   '(("primary" . "#B4C5FF") ("on_primary" . "#1A2D60")
@@ -53,9 +54,153 @@
     (surface . "#F8F9FE") (divider . "#70767D"))
   "Revived light colors with no EBP role.")
 
+;;; The device's scheme (SPEC 20.1.3, amendment #205)
+;;
+;; Revived draws with the device's Material You scheme, so every color
+;; above is one of its roles — or a fixed resource, or a role composited
+;; at some alpha over the surface behind it — as measured on two devices.
+;; When the Companion reports the device's scheme, the palettes derive
+;; from it the way Revived's theme does, and a new wallpaper recolors
+;; Orgzly Native as it recolors Revived; without a report (an old
+;; Companion, a snapshot before the welcome) the measured values stand.
+
+(defun orgzly-design--hex->rgb (hex)
+  "The (R G B) of #RRGGBB HEX, 0-255 each."
+  (list (string-to-number (substring hex 1 3) 16)
+        (string-to-number (substring hex 3 5) 16)
+        (string-to-number (substring hex 5 7) 16)))
+
+(defun orgzly-design-blend (fg alpha bg)
+  "FG at ALPHA (0.0-1.0) composited over BG, both #RRGGBB, as #RRGGBB.
+How Android draws a text or divider color with alpha over its parent."
+  (apply #'format "#%02X%02X%02X"
+         (cl-mapcar (lambda (f b) (round (+ (* alpha f) (* (- 1 alpha) b))))
+                    (orgzly-design--hex->rgb fg) (orgzly-design--hex->rgb bg))))
+
+(defun orgzly-design--device-colors (dark scheme)
+  "Orgzly's app colors for DARK derived from the device's SCHEME plist.
+SCHEME maps role keywords to #rrggbb (`jetpacs-colors'); each entry is
+the Material role Revived's theme draws the element with, a fixed
+resource, or a role at the alpha Android composites it at."
+  (let* ((fixed (if dark orgzly-design-dark-colors orgzly-design-light-colors))
+         ;; A role the device reports, else the measured color FALLBACK:
+         ;; a Companion without Material's vocabulary reports the
+         ;; thirteen standard roles alone.
+         (role (lambda (name fallback)
+                 (let ((value (plist-get scheme name)))
+                   (if value (upcase value) (alist-get fallback fixed)))))
+         (surface (upcase (plist-get scheme :surface)))
+         (on-surface (upcase (plist-get scheme :on_surface)))
+         (text (funcall role :on_surface_variant 'text))
+         (dialog (funcall role :surface_container_high 'dialog))
+         ;; The framework accent of Settings' switches and category
+         ;; titles: primary in light, measured as secondary in dark.
+         (accent (upcase (plist-get scheme (if dark :secondary :primary))))
+         (pill-off (orgzly-design-blend on-surface 0.12 dialog)))
+    `((container . ,(funcall role :surface_container_low 'container))
+      ;; textColorPrimary: on_surface in light; the phone draws it two
+      ;; tones brighter than on_surface in dark (N98 against N90).
+      (strong . ,(if dark (orgzly-design-blend "#FFFFFF" 0.85 on-surface) on-surface))
+      (text . ,text)
+      ;; listDivider: 12% of the foreground over the surface.
+      (guide . ,(orgzly-design-blend (if dark "#FFFFFF" "#000000") 0.12 surface))
+      (bullet . ,(funcall role :on_secondary_container 'bullet))
+      (fab . ,(funcall role :primary_container 'fab))
+      (on-fab . ,(funcall role :on_primary_container 'on-fab))
+      (pill . ,(funcall role :secondary_container 'pill))
+      (on-pill . ,(funcall role :on_secondary_container 'on-pill))
+      ;; Done rows: the text at 45%.
+      (dim . ,(orgzly-design-blend text 0.45 surface))
+      (todo . ,(alist-get 'todo fixed))
+      (done . ,(alist-get 'done fixed))
+      (link . ,(upcase (plist-get scheme :primary)))
+      ;; textColorHint: on_surface at 60% in dark, 38% in light.
+      (hint . ,(orgzly-design-blend on-surface (if dark 0.6 0.38) surface))
+      (dialog . ,dialog)
+      (header . ,accent)
+      (menu . ,(funcall role :surface_container 'menu))
+      (dialog-hint . ,(orgzly-design-blend on-surface 0.6 dialog))
+      ;; The framework switch: the accent at 30% for the track on, the
+      ;; foreground at 30% off; the thumbs are AppCompat's fixed greys.
+      (track-on . ,(orgzly-design-blend accent 0.3 surface))
+      (track-off . ,(if dark (orgzly-design-blend "#FFFFFF" 0.3 surface)
+                      (alist-get 'track-off fixed)))
+      (thumb-on . ,accent)
+      (thumb-off . ,(alist-get 'thumb-off fixed))
+      ;; A disabled tonal button: on_surface at 12%, its label at 38%.
+      (pill-off . ,pill-off)
+      (on-pill-off . ,(orgzly-design-blend on-surface 0.38 pill-off))
+      ;; The period pickers' AlertDialog window: the surface in light,
+      ;; the lowest container in dark.
+      (surface . ,(if dark (funcall role :surface_container_lowest 'surface) surface))
+      (divider . ,(upcase (plist-get scheme :outline))))))
+
+(defun orgzly-design--device-roles (dark scheme colors)
+  "Orgzly's EBP theme roles for DARK from the device's SCHEME and app COLORS.
+The roles the profile's tokens and chrome carry: Revived's window is the
+surface, its body text on_surface_variant, its outline the divider
+composite, and its error and success the fixed TODO and DONE resources."
+  (let ((role (lambda (name) (upcase (plist-get scheme name))))
+        (fixed (if dark orgzly-design-dark orgzly-design-light)))
+    `(("primary" . ,(funcall role :primary))
+      ("on_primary" . ,(funcall role :on_primary))
+      ("secondary" . ,(funcall role :secondary))
+      ("on_secondary" . ,(funcall role :on_secondary))
+      ("background" . ,(funcall role :surface))
+      ("on_background" . ,(funcall role :on_surface))
+      ("surface" . ,(funcall role :surface))
+      ("on_surface" . ,(alist-get 'text colors))
+      ("outline" . ,(alist-get 'guide colors))
+      ("error" . ,(alist-get 'todo colors))
+      ("on_error" . ,(cdr (assoc "on_error" fixed)))
+      ("success" . ,(alist-get 'done colors))
+      ("warning" . ,(cdr (assoc "warning" fixed))))))
+
+(defvar orgzly-design--palettes nil
+  "The derived palettes: ((DARK . SCHEME) ROLES . COLORS) entries.
+SCHEME is the device's scheme plist the entry was derived from, compared
+by identity: the client keeps one object per report.")
+
+(defun orgzly-design--palette (dark)
+  "The (ROLES . COLORS) pair for DARK: the device's, else the measured one."
+  (let* ((scheme (plist-get (jetpacs-colors) (if dark :dark :light)))
+         (key (cons dark scheme)))
+    (or (cdr (assoc key orgzly-design--palettes))
+        (let ((pair (if scheme
+                        (let ((colors (orgzly-design--device-colors dark scheme)))
+                          (cons (orgzly-design--device-roles dark scheme colors) colors))
+                      (cons (if dark orgzly-design-dark orgzly-design-light)
+                            (if dark orgzly-design-dark-colors orgzly-design-light-colors)))))
+          (push (cons key pair) orgzly-design--palettes)
+          ;; Keep the current report's four entries and little else.
+          (when (> (length orgzly-design--palettes) 8)
+            (setcdr (nthcdr 7 orgzly-design--palettes) nil))
+          pair))))
+
+(defvar orgzly-design--profiles nil
+  "The built profiles, ((DARK . SCHEME) . PROFILE) entries.
+Keyed like `orgzly-design--palettes'.")
+
+(defun orgzly-design-current-profile (dark)
+  "Orgzly's profile for DARK in the device's colors, else the measured ones.
+A fresh deep copy each call, as `jetpacs-design-profile-get' returns one;
+the registered presets are the measured palettes and never change."
+  (let* ((key (cons dark (plist-get (jetpacs-colors) (if dark :dark :light))))
+         (entry (assoc key orgzly-design--profiles)))
+    (unless entry
+      (setq entry (cons key (orgzly-design-profile dark)))
+      (push entry orgzly-design--profiles)
+      (when (> (length orgzly-design--profiles) 8)
+        (setcdr (nthcdr 7 orgzly-design--profiles) nil)))
+    (copy-tree (cdr entry))))
+
+(defun orgzly-design-roles (dark)
+  "Orgzly's EBP theme roles for DARK: an alist of role name to #RRGGBB."
+  (car (orgzly-design--palette dark)))
+
 (defun orgzly-design-color (name &optional dark)
   "Return Orgzly color NAME for DARK or the light palette."
-  (alist-get name (if dark orgzly-design-dark-colors orgzly-design-light-colors)))
+  (alist-get name (cdr (orgzly-design--palette dark))))
 
 (defconst orgzly-design-density 2.8125
   "Pixels per dp of the reference device the TextView metrics were measured on.")
@@ -179,8 +324,8 @@ Revived's popup ends at its button, which sits 4dp from the window edge,
 
 (defun orgzly-design-profile (dark)
   "Build Orgzly's immutable Foundation profile, using DARK when non-nil."
-  (let* ((palette (if dark orgzly-design-dark orgzly-design-light))
-         (roles (mapcar (lambda (p) (cons (car p) (jetpacs-design-color (cdr p)))) palette))
+  (let* ((roles (mapcar (lambda (p) (cons (car p) (jetpacs-design-color (cdr p))))
+                        (orgzly-design-roles dark)))
          (c (lambda (name) (orgzly-design-color name dark))))
     (jetpacs-design-make-profile
      (if dark "orgzly.dark" "orgzly.light") (if dark "Orgzly Dark" "Orgzly Light")
@@ -544,8 +689,8 @@ DARK's popup surface, with 48dp rows whose 16sp labels sit 8dp in."
   "Wrap DIALOG like `orgzly-design-wrap' with DARK, sized for the window.
 SHEET, when given, is the dialog sheet style instead."
   (let* ((active (jetpacs-design-active-profile))
-         (profile (copy-tree (if (assoc "orgzly.card" (plist-get active :styles)) active
-                               (jetpacs-design-profile-get (if dark "orgzly.dark" "orgzly.light")))))
+         (profile (if (assoc "orgzly.card" (plist-get active :styles)) (copy-tree active)
+                    (orgzly-design-current-profile dark)))
          (sheet-style sheet)
          (sheet (assoc "orgzly.dialog.sheet" (plist-get profile :styles))))
     (when sheet
@@ -571,7 +716,7 @@ RADIUS is its corner radius, 28dp by default."
   "Wrap SCREEN in the selected profile, defaulting to DARK's Orgzly preset."
   (let* ((active (jetpacs-design-active-profile))
          (profile (if (assoc "orgzly.card" (plist-get active :styles)) active
-                    (jetpacs-design-profile-get (if dark "orgzly.dark" "orgzly.light")))))
+                    (orgzly-design-current-profile dark))))
     (jetpacs-design-profile-scope profile (list screen))))
 
 (provide 'orgzly-design)

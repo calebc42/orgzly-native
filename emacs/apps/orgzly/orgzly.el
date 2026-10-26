@@ -837,9 +837,32 @@ Only variables listed in variable `orgzly-ui-settings' can be named."
       (orgzly--later (lambda () (jetpacs-shell-push "orgzly"))) 'accepted)))
 
 (defun orgzly--on-theme (_args _params)
-  "Toggle the process-local light/dark Orgzly preset."
-  (setq orgzly-state-dark (not orgzly-state-dark))
+  "Toggle the process-local light/dark Orgzly preset.
+From here on the choice is the user's; the device's appearance no
+longer moves it."
+  (setq orgzly-state-dark (not orgzly-state-dark)
+        orgzly-state-theme-chosen t)
   (orgzly--later (lambda () (jetpacs-shell-push "orgzly"))) 'accepted)
+
+(defun orgzly--follow-device ()
+  "Take the device's appearance as the preset while the user has not chosen.
+Revived in its System color scheme follows the device; so does Orgzly
+Native until its theme is toggled.  Nothing changes before the first
+report, so an old Companion keeps the dark default."
+  (when (and (not orgzly-state-theme-chosen) (jetpacs-colors))
+    (setq orgzly-state-dark (jetpacs-device-dark-p))))
+
+(defun orgzly--on-colors-changed (_client _colors)
+  "A `colors.changed' arrived: follow its appearance (SPEC 20.1.3).
+The chrome re-pushes every surface at the next tick, and the palettes
+derive from the new scheme as the builders ask for them."
+  (orgzly--follow-device))
+
+(defun orgzly--on-ready (client)
+  "Read the welcome's device colors and hear every change on CLIENT."
+  (orgzly--follow-device)
+  (cl-pushnew #'orgzly--on-colors-changed
+              (ebp-client-colors-changed-functions client)))
 
 ;;; Revived's overflow commands
 
@@ -1079,6 +1102,8 @@ Revived opens Android's document picker; this lists the Org files of
     (jetpacs-defaction "orgzly.search.delete" #'orgzly--on-search-delete :doc "Remove a confirmed saved query" :args '((:name name :type "string" :required t)))
     (jetpacs-defaction "orgzly.page" #'orgzly--on-page :doc "Select a bounded outline or search page" :args '((:name page :type "integer" :required t)))
     (jetpacs-defaction "orgzly.theme" #'orgzly--on-theme :doc "Toggle Orgzly light and dark appearance"))
+  (add-hook 'jetpacs-ready-functions #'orgzly--on-ready)
+  (when (jetpacs-connected-p) (orgzly--on-ready (jetpacs-client)))
   (jetpacs-defapp "orgzly" :label "Orgzly" :icon "book" :surfaces '("orgzly")
                   :chrome 'standalone :home-route "books" :order 46
                   :destinations '((:key "books" :label "Notebooks" :icon "book"
@@ -1095,6 +1120,9 @@ attributed to the owner."
   (setq orgzly--timers nil orgzly-state nil orgzly-state-folded nil
         orgzly-state-page 0 orgzly-state-query "" orgzly-state-outline nil)
   (orgzly-data-invalidate)
+  (remove-hook 'jetpacs-ready-functions #'orgzly--on-ready)
+  (setq orgzly-state-theme-chosen nil
+        orgzly-design--palettes nil orgzly-design--profiles nil)
   (jetpacs-apps-unregister "orgzly")
   (dolist (id '("orgzly.light" "orgzly.dark")) (jetpacs-design-unregister-profile id))
   t)

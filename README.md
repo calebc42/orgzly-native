@@ -59,11 +59,15 @@ boolean expressions and sort orders. `ad.N` produces agenda sections, bounded to
 occurrences. The supported envelope is 64 local notebooks, 1 MiB each, with
 2,000 total headings. Symlink notebook aliases and path traversal are refused.
 
-Appearance starts with Orgzly Dark, toggled from the overflow menu. The dark
-palette is Revived's dynamic dark scheme as drawn on the reference phone, fixed
-in `orgzly-design.el`; it does not follow the wallpaper, and the light palette
-is a dynamic light scheme of the same seed that has not been measured against
-Revived. Text styles carry TextView line metrics (single-line height, line step
+Appearance follows the device's light or dark setting until the overflow
+menu's toggle picks one. The palettes derive from the device's Material You
+scheme, which the Companion reports (EBP §20.1.3): each color is the Material
+role Revived's theme draws it with, a role composited at Android's alpha over
+the surface behind it, or Revived's fixed TODO and DONE resources, so a new
+wallpaper recolors Orgzly Native as it recolors Revived. Without a report
+(an older Companion) the fixed palettes in `orgzly-design.el` stand: the dark
+one measured on the reference phone, the light one on the Pixel Tablet. Text
+styles carry TextView line metrics (single-line height, line step
 and top padding in reference pixels), so wrapped notes land where Revived puts
 them. A Design Lab profile derived from Orgzly can override the presets;
 unrelated global profiles do not remove required styles.

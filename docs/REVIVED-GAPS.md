@@ -70,12 +70,21 @@ Still open:
 
 ## Colors
 
-- **Wallpaper colors.** Revived follows Material You dynamic colors; Orgzly
-  Native's palettes are fixed: dark measured on the phone, light measured on
-  the tablet. A device with a different wallpaper shows different Revived
-  colors.
+Closed on 2026-10-26: **wallpaper colors.** The Companion reports the
+device's Material You scheme (EBP #205, `colors.changed` and the welcome's
+`colors`), and `orgzly-design.el` derives both palettes from it the way
+Revived's theme does — each color a Material role, a role at Android's
+alpha over the surface behind it, or a fixed resource (TODO, DONE, the
+switch thumbs) — with the measured palettes as the fallback. The preset
+follows the device's appearance until the theme is toggled. Open on the
+device: the derived colors against Revived on the phone and the tablet,
+and the one deliberate approximation — the phone draws `textColorPrimary`
+two tones brighter than `on_surface` in dark, which the derivation
+reproduces as on_surface 85% toward white.
+
 - **Light palette on the phone** and **dark palette on the tablet** were
-  never measured.
+  never measured; with the device scheme both now derive from the same
+  roles, which the device check above covers.
 
 ## Measurement artefacts (not styling differences)
 
