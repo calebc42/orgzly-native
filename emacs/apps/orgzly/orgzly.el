@@ -541,13 +541,17 @@ A pick re-shows it, so the request it replaces concludes unanswered."
        (orgzly--draft-put scope field (if (equal value "set") stamp "")))
       ((or "title" "content")
        (when (equal value "set")
-         (let ((text (or (plist-get ts :text) "")))
-           (setq orgzly--reset-fields (list (concat "oz-" field)))
-           (orgzly--draft-put scope field
-                              (concat text (unless (or (string-empty-p text)
-                                                       (string-suffix-p " " text))
-                                             " ")
-                                      stamp))))))))
+         (if (and (equal field "content") (orgzly--content-editor scope))
+             ;; Revived inserts the stamp at the caret; the editor's
+             ;; mirror carries the new text into the draft.
+             (orgzly--editor-insert scope stamp)
+           (let ((text (or (plist-get ts :text) "")))
+             (setq orgzly--reset-fields (list (concat "oz-" field)))
+             (orgzly--draft-put scope field
+                                (concat text (unless (or (string-empty-p text)
+                                                         (string-suffix-p " " text))
+                                               " ")
+                                        stamp)))))))))
 
 (defun orgzly--ts-open (scope field raw &optional text)
   "Open the timestamp dialog for FIELD of form SCOPE, seeded from RAW.
@@ -627,13 +631,74 @@ It opens over the timestamp dialog, which shows again with the pick."
                                               (intern (concat (symbol-name key) "-on")) t))
              (orgzly--later #'orgzly--ts-show))))))))
 
+;;; The synchronized content editor (SPEC 19)
+
+(defun orgzly--content-scope (document)
+  "The form scope whose content DOCUMENT synchronizes, or nil."
+  (and (stringp document) (string-prefix-p "orgzly:content:" document)
+       (substring document (length "orgzly:content:"))))
+
+(defun orgzly--content-editor (scope)
+  "The live synchronized content editor of form SCOPE: (CLIENT DOCUMENT ID).
+Nil while no session is open — before the Companion's `edit.open',
+after its `edit.close', or on a Companion without `editor.sync'."
+  (when-let* ((client (jetpacs-client))
+              (document (orgzly-ui-content-document scope))
+              (id (let ((orgzly-field-scope scope)) (orgzly-field-id "oz-content"))))
+    (and (ebp-client-editor-text client document id)
+         (list client document id))))
+
+(defun orgzly--on-edit-change (_client document _editor-id text)
+  "Keep the draft's content on the synchronized editor's TEXT (SPEC 19).
+DOCUMENT names the form whose content changed; another document is not
+ours.  Every accepted delta lands here before Done's action can, so
+Done and the view read the draft; nothing is pushed, the device shows
+it already."
+  (when-let* ((scope (orgzly--content-scope document)))
+    (when (stringp text)
+      (unless (equal (plist-get orgzly-state-draft :scope) scope)
+        (setq orgzly-state-draft (list :scope scope)))
+      (setq orgzly-state-draft (plist-put orgzly-state-draft :content text)))))
+
+(defun orgzly--editor-replace (scope text)
+  "Replace the whole synchronized content of form SCOPE with TEXT."
+  (pcase-let* ((`(,client ,document ,id) (orgzly--content-editor scope))
+               (old (ebp-client-editor-text client document id)))
+    (ebp-client-edit-apply client document id 0 (length old) text)))
+
+(defun orgzly--editor-insert (scope text)
+  "Insert TEXT at the device caret of form SCOPE's content, as Revived does.
+A selection the device reported for the current text is replaced; the
+caret ends after the insertion, as it does after typing."
+  (pcase-let* ((`(,client ,document ,id) (orgzly--content-editor scope))
+               (mirror (gethash (cons document id) (ebp-client-editors client)))
+               (length (length (plist-get mirror :text)))
+               (cursor (plist-get mirror :cursor))
+               (sel-start (plist-get mirror :sel_start))
+               (sel-end (plist-get mirror :sel_end))
+               ;; A reported selection counts only while the caret still
+               ;; sits at one of its ends: a later delta moved the caret
+               ;; and left the pair behind.
+               (selected (and (integerp sel-start) (integerp sel-end)
+                              (integerp cursor) (/= sel-start sel-end)
+                              (or (= cursor sel-start) (= cursor sel-end))))
+               (start (cond (selected (min sel-start sel-end))
+                            ((integerp cursor) (min cursor length))
+                            (t length)))
+               (del (if selected (abs (- sel-end sel-start)) 0)))
+    (ebp-client-edit-apply client document id start del text
+                           :cursor (+ start (length text)))))
+
 (defun orgzly--on-note-timestamp (args params)
   "Insert a timestamp into the edited field of form ARGS' `:scope'.
-Revived's toolbar button: content while PARAMS capture it, else the
-title, whose captured text the timestamp is appended to."
+Revived's toolbar button: the content while it is edited — a
+synchronized editor, or a field PARAMS capture — else the title, whose
+captured text the timestamp is appended to."
   (let* ((scope (plist-get args :scope))
          (orgzly-field-scope scope)
-         (field (if (orgzly--field-maybe params "oz-content") "content" "title")))
+         (field (if (or (orgzly--field-maybe params "oz-content")
+                        (and (stringp scope) (orgzly--content-editor scope)))
+                    "content" "title")))
     (if (not (stringp scope)) 'rejected
       (orgzly--ts-open scope field "" (orgzly--field-maybe params (concat "oz-" field)))
       'accepted)))
@@ -859,10 +924,13 @@ derive from the new scheme as the builders ask for them."
   (orgzly--follow-device))
 
 (defun orgzly--on-ready (client)
-  "Read the welcome's device colors and hear every change on CLIENT."
+  "Read the welcome's device colors and hear every change on CLIENT.
+The content editor's mirror reports its text the same way."
   (orgzly--follow-device)
   (cl-pushnew #'orgzly--on-colors-changed
-              (ebp-client-colors-changed-functions client)))
+              (ebp-client-colors-changed-functions client))
+  (cl-pushnew #'orgzly--on-edit-change
+              (ebp-client-edit-change-functions client)))
 
 ;;; Revived's overflow commands
 
@@ -929,15 +997,19 @@ the result lands in the draft until Done saves it."
          (op (pcase (plist-get args :op)
                ("clock-in" 'in) ("clock-out" 'out) ("clock-cancel" 'cancel) ("sort" 'sort))))
     (if (not (and (stringp scope) op)) 'rejected
-      (let ((text (or (orgzly--field-maybe params "oz-content")
-                      (orgzly-ui-note-text "content" entry) "")))
-        ;; Only a field the screen shows can be reset; content in view mode
-        ;; shows the draft as text instead.
-        (setq orgzly--reset-fields (and (orgzly-ui-note-editing-p "content") '("oz-content")))
-        (orgzly--draft-put scope "content"
-                           (if (eq op 'sort)
-                               (string-join (sort (split-string text "\n") #'string<) "\n")
-                             (orgzly--clock op text))))
+      (let* ((text (or (orgzly--field-maybe params "oz-content")
+                       (orgzly-ui-note-text "content" entry) ""))
+             (new (if (eq op 'sort)
+                      (string-join (sort (split-string text "\n") #'string<) "\n")
+                    (orgzly--clock op text))))
+        (if (orgzly--content-editor scope)
+            ;; The synchronized editor takes the new text as one splice;
+            ;; its mirror carries it into the draft.
+            (orgzly--editor-replace scope new)
+          ;; Only a field the screen shows can be reset; content in view
+          ;; mode shows the draft as text instead.
+          (setq orgzly--reset-fields (and (orgzly-ui-note-editing-p "content") '("oz-content")))
+          (orgzly--draft-put scope "content" new)))
       'accepted)))
 
 (defun orgzly--choices (id title choices on-pick)

@@ -33,6 +33,19 @@ Closed later on 2026-10-25:
 - The period dialogs' hint follows the type wheel as it turns
   (`jetpacs.state_switch`), with no round trip.
 
+Closed later on 2026-10-26: **the content is an `editor` node** (SPEC 19,
+`editor.sync`): the Companion opens a session on the form's own document
+(`orgzly:content:<scope>`), every delta feeds the draft through the
+mirror, Done reads the draft, and Insert timestamp splices the stamp at
+the device caret with the caret after it, as Revived's
+`insertStringAtCursorPosition` does.  Clock in/out/cancel and Sort replace
+the editor's text in one splice.  EBP #206 `editor.hint` carries Revived's
+"Content" placeholder; the Foundation editor wears the content field's
+TextView metrics through the `editor.text`, `editor.chromeless` and
+`editor.placeholder` slots.  A Companion without `editor.sync` keeps the
+captured text field.  Org editing features in the content (completion,
+structure commands) can now follow on the same session.
+
 Closed on 2026-10-26: the overflow popup's position on the tablet (8dp
 more inset on sw600, as Revived's toolbar), checkable rows' radio buttons
 and check box at the row's end in the accent color with no highlight (EBP
@@ -53,10 +66,9 @@ Still open:
   `orgzly-import-directory`.
 - **Searches menu.** Revived's Import and Export of saved searches are
   missing.
-- **Insert timestamp.** Revived inserts the stamp at the cursor of the field
-  being edited; Orgzly Native appends it to the end of the content while
-  content is edited, else the title.  Planned: the content field becomes
-  an `editor` node (SPEC 19), whose session carries the cursor.
+- **Insert timestamp into the title.** Revived inserts the stamp at the
+  title's cursor; Orgzly Native appends it to the captured title.  The
+  content is done (below); the title stays a one-line text field.
 
 ## Layout still off
 

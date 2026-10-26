@@ -727,6 +727,36 @@ being typed, as Revived's tags field does."
                        :max-length (if multiline 64000 512)
                        :suggestions (and suggestions (seq-take suggestions 1000)))))
 
+(defun orgzly-ui-content-document (scope)
+  "The document of form SCOPE's content, a synchronized editor (SPEC 19).
+Emacs assigns the identifier; the Companion only ever echoes it."
+  (concat "orgzly:content:" scope))
+
+(defun orgzly-ui-content-synced-p ()
+  "Whether the note's content is a synchronized editor (SPEC 19).
+Revived's content field is a real editor: a timestamp lands at its
+caret and Org editing can follow.  A Companion without `editor.sync'
+gets the captured text field instead."
+  (jetpacs-granted-p "editor.sync"))
+
+(defun orgzly-ui--content-editor (text focus)
+  "The note's content as a synchronized editor seeded with TEXT.
+FOCUS focuses it, opening the keyboard.  The editor wears the content
+field's TextView-shaped styles; its text lives in the editor session's
+mirror, so Done reads the draft the mirror keeps, never a capture."
+  (let ((prefix "orgzly.field.content"))
+    (jetpacs-design-scope
+     nil nil
+     (list (jetpacs-editor (orgzly-field-id "oz-content")
+                           :document (orgzly-ui-content-document orgzly-field-scope)
+                           :value (or text "") :hint "Content" :chromeless t
+                           :min-lines 1 :max-lines 1000
+                           :autofocus (and focus t)))
+     :component-styles
+     (list (jetpacs-design-component-style "editor.chromeless" (list (concat prefix ".box")))
+           (jetpacs-design-component-style "editor.text" (list (concat prefix ".text")))
+           (jetpacs-design-component-style "editor.placeholder" (list (concat prefix ".hint")))))))
+
 (defun orgzly-ui--meta-row (icon body &optional trailing key)
   "One metadata row: ICON, BODY and an optional TRAILING button, keyed KEY."
   (jetpacs-with-attrs
@@ -796,7 +826,9 @@ KIND is `tags' or `properties'; folding the section or Revived's
               '("oz-title"))
             (when (orgzly-ui-note-field-shown-p 'tags entry) '("oz-tags"))
             (when (orgzly-ui-note-field-shown-p 'properties entry) '("oz-prop-name" "oz-prop-value"))
-            (when (orgzly-ui-note-editing-p "content") '("oz-content")))))
+            ;; A synchronized content editor is read from its mirror.
+            (when (and (orgzly-ui-note-editing-p "content") (not (orgzly-ui-content-synced-p)))
+              '("oz-content")))))
 
 (defun orgzly-ui-note-value (field entry)
   "FIELD's current editor value for ENTRY: the draft's, else the note's.
@@ -1362,10 +1394,13 @@ toolbar's Done saves everything at once."
          (list (orgzly-ui--note-divider)
                (orgzly-ui--section-header "notes" "content" (memq 'content folds)))
          (unless (memq 'content folds)
-           (list (if (or (null entry) (orgzly-ui-note-editing-p "content"))
-                     (orgzly-ui--input 'content "oz-content" (orgzly-ui-note-text "content" entry) "Content" t)
-                   (orgzly-ui--note-text 'content "content" (or (orgzly-ui-note-text "content" entry) "")
-                                         "Content" id))))
+           (list (cond ((not (or (null entry) (orgzly-ui-note-editing-p "content")))
+                        (orgzly-ui--note-text 'content "content" (or (orgzly-ui-note-text "content" entry) "")
+                                              "Content" id))
+                       ((orgzly-ui-content-synced-p)
+                        (orgzly-ui--content-editor (orgzly-ui-note-text "content" entry) (and entry t)))
+                       (t (orgzly-ui--input 'content "oz-content" (orgzly-ui-note-text "content" entry)
+                                            "Content" t)))))
          (list (orgzly-ui--note-divider)))))))
 
 (defun orgzly-ui--metadata-shown-p (kind set)
@@ -1400,7 +1435,8 @@ Orgzly Native's items follow only while `orgzly-menu-extras' is non-nil."
   (let* ((kind (plist-get route :kind)) (id (plist-get route :id))
          (scope (orgzly-field-scope route))
          (content (let ((orgzly-field-scope scope))
-                    (and (orgzly-ui-note-editing-p "content") '("oz-content"))))
+                    (and (orgzly-ui-note-editing-p "content") (not (orgzly-ui-content-synced-p))
+                         '("oz-content"))))
          (item (lambda (label name &optional args confirm fields)
                  (jetpacs-menu-item label (orgzly-ui-action name args confirm fields))))
          (common (list (funcall item "Sync" "orgzly.refresh")

@@ -625,3 +625,99 @@ Android's alpha, or the fixed resource; no report keeps the measured palette."
                                 :value)
                      "#121318"))
       (orgzly-design-register))))
+
+;;; The synchronized content editor (SPEC 19)
+
+(defun orgzly-test--with-content-editor (scope text cursor body)
+  "Run BODY with a fake client whose mirror holds SCOPE's content TEXT at CURSOR.
+BODY gets a thunk returning the `edit.apply' frames sent, newest first,
+then the client, document and editor id."
+  (let* ((client (ebp-client-create :receipt-file (make-temp-file "orgzly-editor-receipts")))
+         (document (orgzly-ui-content-document scope))
+         (id (let ((orgzly-field-scope scope)) (orgzly-field-id "oz-content")))
+         (sent nil))
+    (setf (ebp-client-state client) 'ready
+          (ebp-client-granted client) ["editor.sync"])
+    (puthash (cons document id)
+             (list :session (make-string 32 ?0) :seq 0 :text text :cursor cursor)
+             (ebp-client-editors client))
+    (cl-letf (((symbol-function 'jetpacs-client) (lambda () client))
+              ((symbol-function 'ebp-client--request)
+               (lambda (_c method params _cb &optional _t)
+                 (push (cons method params) sent))))
+      (funcall body (lambda () sent) client document id))))
+
+(ert-deftest orgzly-current-content-is-a-synchronized-editor ()
+  "With `editor.sync' granted the edited content is an editor node on the
+form's own document, wearing the content field's styles and Revived's
+hint; Done captures no content field, the mirror is read instead."
+  (orgzly-test-with-snapshot
+    (let* ((entry (car (orgzly-state-entries "gtd")))
+           (route (list :kind 'note :id (alist-get 'id entry)))
+           (scope (orgzly-field-scope route))
+           (orgzly-state-editing (list :scope scope :fields '("content"))))
+      (cl-letf (((symbol-function 'jetpacs-granted-p) (lambda (&rest _) t)))
+        (let* ((screen (orgzly-ui-screen route))
+               (json (jetpacs-node->canonical-json screen)))
+          (should (string-search (format "\"document\":\"orgzly:content:%s\"" scope) json))
+          (should (string-search "\"hint\":\"Content\"" json))
+          (should (string-search "\"slot\":\"editor.placeholder\"" json))
+          (should-not (member "oz-content" (orgzly-ui-note-captures route)))))
+      (cl-letf (((symbol-function 'jetpacs-granted-p) (lambda (&rest _) nil)))
+        (should-not (string-search "\"t\":\"editor\""
+                                   (jetpacs-node->canonical-json (orgzly-ui-screen route))))
+        (should (member "oz-content" (orgzly-ui-note-captures route)))))))
+
+(ert-deftest orgzly-current-timestamp-lands-at-the-content-caret ()
+  "Set in the content's timestamp dialog splices the stamp at the device
+caret with the caret after it, as Revived inserts it; the mirror's text
+then feeds the draft, and no field is reset."
+  (orgzly-test-with-snapshot
+    (let ((orgzly-state-draft nil) (orgzly--reset-fields nil))
+      (orgzly-test--with-content-editor
+       "form" "Call mom later" 8
+       (lambda (sent _client document id)
+         (setq orgzly-state-ts (append '(:scope "form" :field "content")
+                                       (orgzly--ts-seed "<2026-07-12 Sun>")))
+         (orgzly--ts-conclude "set")
+         (let ((params (cdar (funcall sent))))
+           (should (eq (caar (funcall sent)) 'edit.apply))
+           (should (equal (plist-get params :document) document))
+           (should (equal (plist-get params :editor_id) id))
+           (should (= (plist-get params :start) 8))
+           (should (= (plist-get params :del) 0))
+           (should (equal (plist-get params :text) "<2026-07-12 Sun>"))
+           (should (= (plist-get params :cursor) (+ 8 (length "<2026-07-12 Sun>")))))
+         (should-not orgzly--reset-fields)
+         (should-not orgzly-state-ts))))))
+
+(ert-deftest orgzly-current-content-operation-splices-the-editor ()
+  "Clock in on a synchronized content editor replaces its whole text in
+one splice instead of re-seeding the field."
+  (orgzly-test-with-snapshot
+    (let* ((entry (car (orgzly-state-entries "gtd")))
+           (route (list :kind 'note :id (alist-get 'id entry)))
+           (scope (orgzly-field-scope route))
+           (orgzly-state-draft nil) (orgzly--reset-fields nil) (orgzly-state-editing nil))
+      (orgzly-test--with-content-editor
+       scope "Body text" 0
+       (lambda (sent _client _document _id)
+         (should (eq (orgzly--on-note-content-op
+                      (list :scope scope :op "clock-in" :id (alist-get 'id entry)) nil)
+                     'accepted))
+         (let ((params (cdar (funcall sent))))
+           (should (= (plist-get params :start) 0))
+           (should (= (plist-get params :del) (length "Body text")))
+           (should (string-match-p "CLOCK: \\[" (plist-get params :text))))
+         (should-not orgzly--reset-fields))))))
+
+(ert-deftest orgzly-current-editor-text-feeds-the-draft ()
+  "Every reported editor text lands in the draft of its form, so Done and
+the view read what the device shows; another document is ignored."
+  (let ((orgzly-state-draft nil))
+    (orgzly--on-edit-change nil "scratch.el" "hub-eval" "(+ 1 2)")
+    (should-not orgzly-state-draft)
+    (orgzly--on-edit-change nil (orgzly-ui-content-document "form") "x" "typed body")
+    (should (equal orgzly-state-draft '(:scope "form" :content "typed body")))
+    (orgzly--on-edit-change nil (orgzly-ui-content-document "form") "x" nil)
+    (should (equal (plist-get orgzly-state-draft :content) "typed body"))))
